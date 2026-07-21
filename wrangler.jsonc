@@ -1,0 +1,23 @@
+{
+  "name": "sofabet",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-15",
+  "compatibility_flags": ["nodejs_compat"],
+  // Model fitting (full-batch Adam over hundreds of matches) and walk-forward
+  // backtests are CPU-heavy; raise the CPU limit (standard usage model).
+  "limits": { "cpu_ms": 30000 },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 }
+  },
+  // Daily sync + model refit at 04:17 UTC (off-:00/:30 to avoid the rush).
+  "triggers": { "crons": ["17 4 * * *"] },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "sofabet-db",
+      "database_id": "9b1d7be8-d6e6-4a23-bca4-827fa5263c03",
+      "migrations_dir": "./migrations"
+    }
+  ]
+}

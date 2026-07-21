@@ -1,0 +1,7 @@
+# Copy this file to `.dev.vars` and fill in your real token for local dev.
+# `.dev.vars` is gitignored — never commit real secrets.
+# Get a free API token at https://www.football-data.org/client/register
+FOOTBALL_DATA_TOKEN=your-football-data-org-token-here
+# Optional: protects POST /api/sync. If set, the endpoint requires
+# `Authorization: Bearer <SYNC_KEY>`. Recommended for production.
+SYNC_KEY=any-long-random-string
