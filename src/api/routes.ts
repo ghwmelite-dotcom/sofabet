@@ -162,13 +162,16 @@ async function handleModel(league: string, env: Env): Promise<Response> {
   const { params, meta } = await getOrFitParams(env.DB, league);
   const teams = await getTeams(env.DB, league);
   const nameById = new Map(teams.map((t) => [t.id, t.name]));
+  // Net-strength ranking: alpha_i + beta_i (log-goal supremacy over a league-
+  // average opponent, up to a constant). Sign convention: higher attack =
+  // scores more; higher defence = concedes FEWER (opponent xG carries -beta).
   const ratings = params.teamIds
     .map((id, i) => ({
       teamId: id,
       name: nameById.get(id) ?? `#${id}`,
       attack: params.attack[i],
       defence: params.defence[i],
-      rating: params.attack[i] - params.defence[i],
+      rating: params.attack[i] + params.defence[i],
     }))
     .sort((a, b) => b.rating - a.rating);
   return json({ league, homeAdv: params.homeAdv, rho: params.rho, ratings, model: meta });
