@@ -82,6 +82,34 @@ All responses are JSON. Errors are `{"error": "..."}` with a sensible status.
 | `GET /api/model/:league[?kind=goals\|cards]` | Fitted ratings table (attack/defence per team, home advantage, rho, fitted_at, match_count). `kind=cards` returns the yellow-card ratings fitted on `match_stats` |
 | `GET /api/backtest?league=PL` | Walk-forward backtest: log loss / Brier / RPS for model vs base-rate baseline vs uniform, decile calibration table |
 
+## PWA + bet tracker
+
+The worker serves an installable PWA (vanilla JS, no build step) from
+`./public` via Workers Static Assets: `/api/*` runs the Worker
+(`run_worker_first`), everything else serves static files, and unknown
+non-API GET paths fall back to `index.html` (SPA). Open the worker URL in a
+browser and use the **Install** button (or the browser's install affordance).
+
+Screens: fixtures (probability bars, "+ bet" shortcut), match detail (all
+markets incl. handicaps + cards), ratings, accuracy (lazy per-league
+backtests with a calibration chart), and bets.
+
+**Bet tracker** (all `/api/bets*` routes require
+`Authorization: Bearer <SYNC_KEY>` — stake data is private; the PWA asks for
+the key once and keeps it in localStorage):
+
+| Method & path | Description |
+|---|---|
+| `GET /api/bets?status=open\|settled\|all` | List bets, newest first |
+| `POST /api/bets` | Create `{league?, matchId?, matchLabel, bookmaker, market, selection, line?, odds, stake}` (odds > 1, stake > 0) |
+| `POST /api/bets/:id/settle` | `{result: won\|lost\|void}` — profit = stake·(odds−1) / −stake / 0 |
+| `POST /api/bets/:id/delete` | Remove a bet |
+| `POST /api/bets/autosettle` | Settles open match-linked bets whose match is FINISHED, evaluating 1X2 / doubleChance / overUnder (exact-line = void) / btts against the score; unsupported markets are reported as skipped |
+| `GET /api/bets/summary` | Staked, profit, ROI%, strike rate, status counts, breakdowns by bookmaker and market |
+
+The tracker records **manual** bets for personal record-keeping; the project
+still never places wagers anywhere.
+
 ## Cards data
 
 Bookings come from the football-data.org **match-detail endpoint**

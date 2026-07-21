@@ -61,6 +61,24 @@ export interface IngestedMatch {
   awayGoals: number | null;
 }
 
+/** Bet tracker row. status: 'open' | 'won' | 'lost' | 'void'. */
+export interface BetRow {
+  id: number;
+  created_at: string;
+  league: string | null;
+  match_id: number | null;
+  match_label: string;
+  bookmaker: string;
+  market: string;
+  selection: string;
+  line: number | null;
+  odds: number;
+  stake: number;
+  status: string;
+  settled_at: string | null;
+  profit: number | null;
+}
+
 /** HTTP error with a status code, translated to `{error}` JSON by the router. */
 export class HttpError extends Error {
   readonly status: number;

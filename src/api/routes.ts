@@ -14,13 +14,8 @@ import { predictScoreGrid } from "../model/dixonColes";
 import { gridToMarkets } from "../model/markets";
 import { backtestLeague, getOrFitCards, getOrFitParams, predictMatch } from "../model/service";
 import { FootballDataError, HttpError, StatsRestrictedError } from "../types";
-
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data, null, 2), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
+import { handleBets } from "./bets";
+import { json, requireSyncKey } from "./util";
 
 /** Raw ?league= value, uppercased. Throws 400 if absent. */
 function requireLeagueParam(url: URL): string {
@@ -85,18 +80,8 @@ async function handleLeagues(env: Env): Promise<Response> {
  * POST /api/sync can burn the upstream football-data.org rate quota, so when
  * the SYNC_KEY secret is configured the endpoint requires a matching
  * `Authorization: Bearer <key>` header. Unset = open (fine for local dev).
+ * The guard itself lives in ./util (shared with /api/bets).
  */
-function requireSyncKey(env: Env, request: Request): void {
-  const key = env.SYNC_KEY;
-  if (!key) return;
-  const header = request.headers.get("authorization") ?? "";
-  const presented = header.startsWith("Bearer ") ? header.slice(7) : "";
-  const a = new TextEncoder().encode(presented);
-  const b = new TextEncoder().encode(key);
-  if (a.byteLength !== b.byteLength || !crypto.subtle.timingSafeEqual(a, b)) {
-    throw new HttpError(401, "missing or invalid sync key (expected 'Authorization: Bearer <SYNC_KEY>')");
-  }
-}
 
 async function handleSync(url: URL, env: Env, request: Request): Promise<Response> {
   requireSyncKey(env, request);
@@ -175,6 +160,7 @@ async function handleFixtures(url: URL, env: Env): Promise<Response> {
   const fixtures = await getScheduledMatches(env.DB, league);
   const { params, meta } = await getOrFitParams(env.DB, league);
   const teamIds = new Set(params.teamIds);
+  const nameById = new Map((await getTeams(env.DB, league)).map((t) => [t.id, t.name]));
   const out = fixtures.map((f) => {
     const base = {
       matchId: f.id,
@@ -183,6 +169,8 @@ async function handleFixtures(url: URL, env: Env): Promise<Response> {
       status: f.status,
       homeTeamId: f.home_team_id,
       awayTeamId: f.away_team_id,
+      homeTeamName: nameById.get(f.home_team_id) ?? `#${f.home_team_id}`,
+      awayTeamName: nameById.get(f.away_team_id) ?? `#${f.away_team_id}`,
     };
     if (!teamIds.has(f.home_team_id) || !teamIds.has(f.away_team_id)) {
       return { ...base, prediction: null };
@@ -269,6 +257,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
     if (path === "/api/fixtures" && method === "GET") return await handleFixtures(url, env);
     if (path === "/api/predict" && method === "GET") return await handlePredict(url, env);
     if (path === "/api/backtest" && method === "GET") return await handleBacktest(url, env);
+    if (path === "/api/bets" || path.startsWith("/api/bets/")) return await handleBets(request, env, url);
     const modelMatch = /^\/api\/model\/([A-Za-z0-9]+)$/.exec(path);
     if (modelMatch && method === "GET") return await handleModel(modelMatch[1].toUpperCase(), url, env);
     if (path.startsWith("/api/")) throw new HttpError(404, `no route for ${method} ${path}`);

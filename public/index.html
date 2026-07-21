@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f172a" />
+    <title>Sofabet</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#/fixtures">Sofabet</a>
+      <nav class="nav">
+        <a href="#/fixtures" data-nav="fixtures">Fixtures</a>
+        <a href="#/ratings" data-nav="ratings">Ratings</a>
+        <a href="#/accuracy" data-nav="accuracy">Accuracy</a>
+        <a href="#/bets" data-nav="bets">Bets</a>
+      </nav>
+      <button id="installBtn" class="btn btn-small" hidden>Install</button>
+    </header>
+    <main id="app" class="container"></main>
+  </body>
+</html>
