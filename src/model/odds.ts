@@ -15,6 +15,9 @@ export function normalizeTeamName(name: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9 ]+/g, " ")
+    // "Brighton & Hove Albion FC" (D1) vs "Brighton and Hove Albion" (odds):
+    // drop standalone "and" so both reduce to the same tokens.
+    .replace(/\band\b/g, " ")
     .replace(/\s+(fc|afc|cf)\s*$/g, "")
     .replace(/\s+/g, " ")
     .trim();
