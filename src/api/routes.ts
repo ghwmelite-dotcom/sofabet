@@ -6,14 +6,25 @@
 
 import { LEAGUES } from "../config";
 import { FootballDataClient } from "../data/footballData";
-import { countPendingStats, getMatchCountsByLeague, getScheduledMatches, getStatsCoverage, getTeams } from "../data/repo";
+import {
+  countOddsSnapshots,
+  countPendingStats,
+  getMatchCountsByLeague,
+  getMeta,
+  getOddsSnapshotsForLeague,
+  getScheduledMatches,
+  getStatsCoverage,
+  getTeams,
+} from "../data/repo";
 import { syncAllLeagues, syncLeague } from "../data/sync";
+import { syncOddsLeague } from "../data/syncOdds";
 import { syncStatsBatch } from "../data/syncStats";
 import { InsufficientDataError } from "../model/backtest";
 import { predictScoreGrid } from "../model/dixonColes";
 import { gridToMarkets } from "../model/markets";
+import { isValueRow, latestPerCombo } from "../model/odds";
 import { backtestLeague, getOrFitCards, getOrFitParams, predictMatch } from "../model/service";
-import { FootballDataError, HttpError, StatsRestrictedError } from "../types";
+import { FootballDataError, HttpError, OddsRestrictedError, StatsRestrictedError } from "../types";
 import { handleBets } from "./bets";
 import { json, requireSyncKey } from "./util";
 
@@ -154,6 +165,82 @@ async function handleStatsCoverage(env: Env): Promise<Response> {
   return json({ leagues });
 }
 
+const ODDS_MARKETS = new Set(["h2h", "totals"]);
+
+function parseOddsMarkets(url: URL): string {
+  const raw = url.searchParams.get("markets");
+  if (raw === null) return "h2h,totals"; // manual syncs default to both
+  const parts = raw.split(",").map((p) => p.trim());
+  if (parts.length === 0 || parts.some((p) => !ODDS_MARKETS.has(p))) {
+    throw new HttpError(400, "'markets' must be a comma-separated subset of h2h,totals");
+  }
+  return [...new Set(parts)].join(",");
+}
+
+/**
+ * POST /api/sync-odds?league=PL[&markets=h2h,totals] — SYNC_KEY-protected,
+ * synchronous. One quota unit per market requested.
+ */
+async function handleSyncOdds(url: URL, env: Env, request: Request): Promise<Response> {
+  requireSyncKey(env, request);
+  const league = requireLeagueParam(url);
+  requireRegisteredLeague(league);
+  const markets = parseOddsMarkets(url);
+  const result = await syncOddsLeague(env.DB, env, league, markets);
+  return json({ ok: true, ...result });
+}
+
+/** GET /api/value?league=PL[&minEv=0.04] — +EV opportunities from the latest snapshots. */
+async function handleValue(url: URL, env: Env): Promise<Response> {
+  const league = requireLeagueParam(url);
+  await requireKnownLeague(env, league);
+  const rawMinEv = url.searchParams.get("minEv");
+  const minEv = rawMinEv === null ? 0.04 : Number(rawMinEv);
+  if (!Number.isFinite(minEv) || minEv < 0 || minEv > 1) {
+    throw new HttpError(400, "'minEv' must be a number between 0 and 1");
+  }
+  const synced = await countOddsSnapshots(env.DB, league);
+  if (synced === 0) {
+    return json(
+      {
+        error: `no odds synced for league ${league} yet — run POST /api/sync-odds?league=${league} first`,
+        code: "no_odds_synced",
+      },
+      400,
+    );
+  }
+  const nowIso = new Date().toISOString();
+  const rows = await getOddsSnapshotsForLeague(env.DB, league);
+  const quotaRemaining = await getMeta(env.DB, "odds_quota_remaining");
+  const opportunities = latestPerCombo(rows)
+    .filter((r) => r.utc_date > nowIso)
+    .filter((r) => isValueRow(r, { minEv }))
+    .sort((a, b) => b.ev_pct - a.ev_pct)
+    .map((r) => ({
+      matchId: r.match_id,
+      homeTeam: r.home_name,
+      awayTeam: r.away_name,
+      utcDate: r.utc_date,
+      market: r.market,
+      selection: r.selection,
+      line: r.line,
+      modelProb: r.model_prob,
+      fairOdds: r.model_prob > 0 ? 1 / r.model_prob : null,
+      bestOdds: r.best_odds,
+      consensusOdds: r.consensus_odds,
+      bookmakers: r.bookmakers,
+      evPct: r.ev_pct,
+      fetchedAt: r.fetched_at,
+    }));
+  return json({
+    league,
+    minEv,
+    count: opportunities.length,
+    opportunities,
+    quotaRemaining: quotaRemaining !== null ? Number(quotaRemaining) : null,
+  });
+}
+
 async function handleFixtures(url: URL, env: Env): Promise<Response> {
   const league = requireLeagueParam(url);
   await requireKnownLeague(env, league);
@@ -253,7 +340,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
     if (path === "/api/leagues" && method === "GET") return await handleLeagues(env);
     if (path === "/api/sync" && method === "POST") return await handleSync(url, env, request);
     if (path === "/api/sync-stats" && method === "POST") return await handleSyncStats(url, env, request);
+    if (path === "/api/sync-odds" && method === "POST") return await handleSyncOdds(url, env, request);
     if (path === "/api/stats-coverage" && method === "GET") return await handleStatsCoverage(env);
+    if (path === "/api/value" && method === "GET") return await handleValue(url, env);
     if (path === "/api/fixtures" && method === "GET") return await handleFixtures(url, env);
     if (path === "/api/predict" && method === "GET") return await handlePredict(url, env);
     if (path === "/api/backtest" && method === "GET") return await handleBacktest(url, env);
@@ -280,6 +369,9 @@ function errorResponse(e: unknown, path: string): Response {
     return json({ error: e.message, retryAfterSeconds: e.retryAfterSeconds ?? null }, status);
   }
   if (e instanceof StatsRestrictedError) {
+    return json({ error: e.message, restricted: true }, 403);
+  }
+  if (e instanceof OddsRestrictedError) {
     return json({ error: e.message, restricted: true }, 403);
   }
   const message = e instanceof Error ? e.message : String(e);

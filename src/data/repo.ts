@@ -4,7 +4,7 @@
  * an argument — no global state.
  */
 
-import type { CardMatch, IngestedMatch, MatchRow, ModelMatch, TeamRow } from "../types";
+import type { CardMatch, IngestedMatch, MatchRow, ModelMatch, OddsSnapshotRow, TeamRow } from "../types";
 
 const BATCH_CHUNK = 50;
 
@@ -308,6 +308,94 @@ export async function countCardStats(db: D1Database, league: string): Promise<nu
        FROM match_stats s
        JOIN matches m ON m.id = s.match_id
        WHERE m.league = ? AND s.home_yellow IS NOT NULL AND s.away_yellow IS NOT NULL`,
+    )
+    .bind(league)
+    .first<{ c: number }>();
+  return row?.c ?? 0;
+}
+
+/* ---- meta (key-value) ---- */
+
+export async function getMeta(db: D1Database, key: string): Promise<string | null> {
+  const row = await db.prepare("SELECT value FROM meta WHERE key = ?").bind(key).first<{ value: string }>();
+  return row?.value ?? null;
+}
+
+export async function setMeta(db: D1Database, key: string, value: string): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO meta (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    )
+    .bind(key, value)
+    .run();
+}
+
+/* ---- odds_snapshots ---- */
+
+export interface OddsSnapshotInsert {
+  matchId: number;
+  market: string;
+  selection: string;
+  line: number | null;
+  bestOdds: number;
+  consensusOdds: number;
+  bookmakers: number;
+  modelProb: number;
+  evPct: number;
+  fetchedAt: string;
+}
+
+/**
+ * Replace a league's snapshots for not-yet-started matches (delete + insert
+ * in one batch = one transaction); snapshots of started matches are kept.
+ */
+export async function replaceLeagueOddsSnapshots(
+  db: D1Database,
+  league: string,
+  nowIso: string,
+  rows: OddsSnapshotInsert[],
+): Promise<void> {
+  const del = db.prepare(
+    `DELETE FROM odds_snapshots
+     WHERE match_id IN (SELECT id FROM matches WHERE league = ? AND utc_date > ?)`,
+  ).bind(league, nowIso);
+  const ins = db.prepare(
+    `INSERT INTO odds_snapshots
+       (match_id, market, selection, line, best_odds, consensus_odds, bookmakers, model_prob, ev_pct, fetched_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const statements = [
+    del,
+    ...rows.map((r) =>
+      ins.bind(r.matchId, r.market, r.selection, r.line, r.bestOdds, r.consensusOdds, r.bookmakers, r.modelProb, r.evPct, r.fetchedAt),
+    ),
+  ];
+  await batchInChunks(db, statements);
+}
+
+/** Snapshot rows for a league, newest generation per match/market/selection. */
+export async function getOddsSnapshotsForLeague(db: D1Database, league: string): Promise<OddsSnapshotRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT s.*, m.utc_date, ht.name AS home_name, at.name AS away_name
+       FROM odds_snapshots s
+       JOIN matches m ON m.id = s.match_id
+       JOIN teams ht ON ht.id = m.home_team_id
+       JOIN teams at ON at.id = m.away_team_id
+       WHERE m.league = ?`,
+    )
+    .bind(league)
+    .all<OddsSnapshotRow>();
+  return results;
+}
+
+export async function countOddsSnapshots(db: D1Database, league: string): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS c
+       FROM odds_snapshots s JOIN matches m ON m.id = s.match_id
+       WHERE m.league = ?`,
     )
     .bind(league)
     .first<{ c: number }>();

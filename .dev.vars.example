@@ -5,3 +5,7 @@ FOOTBALL_DATA_TOKEN=your-football-data-org-token-here
 # Optional: protects POST /api/sync. If set, the endpoint requires
 # `Authorization: Bearer <SYNC_KEY>`. Recommended for production.
 SYNC_KEY=any-long-random-string
+# Optional: the-odds-api.com key for bookmaker-odds ingestion (+EV value
+# finder). Free tier is 500 requests/month. Leave as replace-me to keep the
+# odds endpoints disabled locally. https://the-odds-api.com/liveapi/guides/v4/
+ODDS_API_KEY=replace-me

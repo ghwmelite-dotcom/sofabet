@@ -39,6 +39,8 @@ npx wrangler login
 npx wrangler d1 create sofabet-db
 #    -> paste the printed database_id into wrangler.jsonc (replaces the placeholder)
 npx wrangler secret put FOOTBALL_DATA_TOKEN
+npx wrangler secret put SYNC_KEY            # protects sync + bets endpoints
+npx wrangler secret put ODDS_API_KEY        # optional; odds/value finder
 npx wrangler d1 migrations apply sofabet-db --remote
 npx wrangler deploy
 # 3. Load data (one open request, throttled to <10 req/min; takes ~2-3 min):
@@ -77,6 +79,8 @@ All responses are JSON. Errors are `{"error": "..."}` with a sensible status.
 | `POST /api/sync?league=PL[&seasons=2]` | Sync one league from football-data.org. Requires `Authorization: Bearer <SYNC_KEY>` when that secret is set. `league=all` syncs every league in one held-open request (throttled to <10 req/min, ~2-3 min). `seasons=N` also fetches N-1 previous seasons (backtest depth) |
 | `POST /api/sync-stats?league=PL[&limit=70]` | SYNC_KEY-protected, synchronous. Backfills bookings (`match_stats`) for up to `limit` FINISHED matches without stats, newest first (~6.5s/match). Returns `{stored, failed, remaining, rateLimited}`. Upstream 429 stops the batch gracefully (partial counts); a tier-restricted detail endpoint returns 403 `{restricted: true}` and inserts nothing |
 | `GET /api/stats-coverage` | Per league: finished match count, matches with bookings, coverage pct |
+| `POST /api/sync-odds?league=PL[&markets=h2h,totals]` | SYNC_KEY-protected, synchronous. Fetches the-odds-api events for the league, matches them to D1 fixtures (name normalization + 3h kickoff window), aggregates bookmaker prices (consensus = mean, best = max, count) and stores one snapshot per outcome with model probability and EV. One quota unit per market requested. Returns events/matched/unmatched/snapshots + quota headers |
+| `GET /api/value?league=PL[&minEv=0.04]` | +EV opportunities from the latest snapshots of not-yet-started matches: ev_pct ≥ minEv, model_prob ≥ 0.15, ≥ 3 bookmakers, sorted by EV desc. 400 `no_odds_synced` when the league has no snapshots yet |
 | `GET /api/fixtures?league=PL` | Scheduled fixtures from D1 with model predictions attached (1X2, BTTS, O2.5, xG, most likely score, double chance, AH −0.5/+0.5) |
 | `GET /api/predict?league=PL&home=<name\|id>&away=<name\|id>` | Full markets: 1X2, BTTS, over/under 0.5–4.5, top 5 correct scores, double chance, draw-no-bet (with fair odds), team totals 0.5–3.5, asian handicap ladder −2..+2 step 0.25 (quarter lines = half-stake averages; fairOdds = (1−pPush)/pWin), european handicap −2..+2; expected goals; model freshness. Plus a `cards` block (expected yellows, total O/U 1.5–6.5, per-team O/U 1.5/2.5) once the league has ≥ 60 matches with bookings — otherwise `cards: null` with a `cardsCoverage` note |
 | `GET /api/model/:league[?kind=goals\|cards]` | Fitted ratings table (attack/defence per team, home advantage, rho, fitted_at, match_count). `kind=cards` returns the yellow-card ratings fitted on `match_stats` |
@@ -90,9 +94,9 @@ The worker serves an installable PWA (vanilla JS, no build step) from
 non-API GET paths fall back to `index.html` (SPA). Open the worker URL in a
 browser and use the **Install** button (or the browser's install affordance).
 
-Screens: fixtures (probability bars, "+ bet" shortcut), match detail (all
-markets incl. handicaps + cards), ratings, accuracy (lazy per-league
-backtests with a calibration chart), and bets.
+Screens: fixtures (probability bars, "+ bet" shortcut), value (+EV list with
+odds refresh), match detail (all markets incl. handicaps + cards), ratings,
+accuracy (lazy per-league backtests with a calibration chart), and bets.
 
 **Bet tracker** (all `/api/bets*` routes require
 `Authorization: Bearer <SYNC_KEY>` — stake data is private; the PWA asks for
@@ -109,6 +113,26 @@ the key once and keeps it in localStorage):
 
 The tracker records **manual** bets for personal record-keeping; the project
 still never places wagers anywhere.
+
+## Odds data (+EV value finder)
+
+Bookmaker prices come from [the-odds-api](https://the-odds-api.com/) v4
+(key in the `ODDS_API_KEY` secret). Free tier is **500 requests/month** and
+usage is per market per request: `h2h` costs 1 unit, `h2h,totals` costs 2
+units per league call. The daily cron syncs **h2h only** for all 8 leagues —
+8 units/day ≈ 240/month — leaving headroom; totals are synced on demand via
+`POST /api/sync-odds?league=X&markets=h2h,totals` or the PWA's "Refresh odds"
+button. Latest quota headers are persisted in `meta` and shown in the PWA.
+
+Requests use `regions=eu`. Note that SportyBet/1xBet prices aren't listed on
+the-odds-api — we compare the model against the **EU market consensus + best
+available price**, which is the standard sharp reference (1xBet's EU prices
+track that consensus closely). Sport keys are resolved dynamically from
+`/sports` by title and cached in `meta` (refetched if a cached key 404s).
+
+EV definition: `evPct = modelProb × bestOdds − 1` — best price is what you
+can actually take; consensus is shown for context. Value rows additionally
+require modelProb ≥ 0.15 and ≥ 3 bookmakers.
 
 ## Cards data
 

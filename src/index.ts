@@ -9,6 +9,7 @@ import { handleRequest } from "./api/routes";
 import { LEAGUES } from "./config";
 import { FootballDataClient } from "./data/footballData";
 import { syncAllLeagues } from "./data/sync";
+import { syncOddsLeague } from "./data/syncOdds";
 import { syncStatsBatch } from "./data/syncStats";
 import { refitLeague } from "./model/service";
 import { StatsRestrictedError } from "./types";
@@ -39,6 +40,32 @@ async function runDaily(env: Env, cron: string): Promise<void> {
         JSON.stringify({ message: "league refit failed", league, error: e instanceof Error ? e.message : String(e) }),
       );
     }
+  }
+
+  // Odds sync after refits: h2h only (1 unit/league/day ≈ 240/month on the
+  // 500/month free tier). totals stay on-demand via POST /api/sync-odds.
+  if (env.ODDS_API_KEY) {
+    for (const league of Object.keys(LEAGUES)) {
+      try {
+        const result = await syncOddsLeague(env.DB, env, league, "h2h");
+        console.log(
+          JSON.stringify({
+            message: "odds synced",
+            league,
+            events: result.events,
+            matched: result.matched,
+            snapshots: result.snapshots,
+            quotaRemaining: result.quotaRemaining,
+          }),
+        );
+      } catch (e) {
+        console.error(
+          JSON.stringify({ message: "odds sync failed", league, error: e instanceof Error ? e.message : String(e) }),
+        );
+      }
+    }
+  } else {
+    console.log(JSON.stringify({ message: "odds sync skipped", reason: "ODDS_API_KEY not set" }));
   }
   console.log(JSON.stringify({ message: "daily job finished" }));
 }

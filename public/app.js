@@ -33,6 +33,7 @@ async function api(path, opts = {}) {
   if (!res.ok) {
     const err = new Error((data && data.error) || `HTTP ${res.status}`);
     err.status = res.status;
+    err.data = data;
     throw err;
   }
   return data;
@@ -426,18 +427,18 @@ async function renderBets(root) {
   }
 }
 
-function renderKeyPrompt(root, note) {
+function renderKeyPrompt(root, note, onSaved) {
   const input = el("input", { type: "password", placeholder: "Admin key (SYNC_KEY)", autocomplete: "off" });
   const save = () => {
     const v = input.value.trim();
     if (!v) return;
     state.key = v;
     localStorage.setItem("sofabet_key", v);
-    renderBets(document.getElementById("app"));
+    (onSaved || (() => renderBets(document.getElementById("app"))))();
   };
   root.replaceChildren(
     el("div", { class: "card" }, [
-      el("h3", { text: "Bet tracker is private" }),
+      el("h3", { text: "This area is private" }),
       el("p", { class: "note", text: "Enter the admin key once. It is stored in this browser only (localStorage) and sent as a Bearer token to your own worker." }),
       note ? el("p", { class: "error", text: note }) : null,
       el("div", { class: "meta-row" }, [
@@ -479,7 +480,12 @@ function betForm(root, prefill) {
     lineField.style.display = market.value === "overUnder" ? "" : "none";
   };
   market.addEventListener("change", syncSelections);
+  // "+ bet" / "log bet" shortcuts prefill the form from a fixture or value row.
+  if (prefill?.market && MARKET_SELECTIONS[prefill.market]) market.value = prefill.market;
   syncSelections();
+  if (prefill?.selection) selection.value = prefill.selection;
+  if (prefill?.line != null) line.value = String(prefill.line);
+  if (prefill?.odds != null) odds.value = String(prefill.odds);
 
   const msg = el("p", { class: "note" });
   const submit = el("button", {
@@ -616,6 +622,121 @@ function settingsCard(root) {
   ]);
 }
 
+/* ---------- #/value ---------- */
+
+async function renderValue(root, params) {
+  if (!state.key) {
+    renderKeyPrompt(root, null, () => renderValue(root, params));
+    return;
+  }
+  root.replaceChildren(loading());
+  try {
+    const leagues = await loadLeagues();
+    const pool = leagues.filter((l) => l.matches.scheduled > 0);
+    const selected = params.get("league") && pool.some((l) => l.key === params.get("league")) ? params.get("league") : pool[0]?.key;
+    const quotaBadge = el("span", { class: "chip static", text: "odds API quota: …" });
+    const syncMsg = el("p", { class: "note" });
+    const list = el("div", {});
+    const refreshBtn = el("button", {
+      class: "btn btn-small",
+      text: "Refresh odds",
+      onclick: async () => {
+        refreshBtn.disabled = true;
+        syncMsg.textContent = "Syncing odds (h2h + totals)…";
+        try {
+          const r = await api(`/api/sync-odds?league=${encodeURIComponent(selected)}&markets=h2h,totals`, { auth: true, method: "POST" });
+          syncMsg.textContent =
+            `Synced ${r.events} events (${r.matched} matched, ${r.snapshots} snapshots).` +
+            (r.unmatched.length > 0 ? ` Unmatched: ${r.unmatched.join("; ")}` : "");
+          if (r.quotaRemaining != null) quotaBadge.textContent = `odds API quota: ${r.quotaRemaining} left`;
+          await loadValueList(list, selected, quotaBadge);
+        } catch (err) {
+          syncMsg.textContent = err.message;
+          if (err.status === 401) renderKeyPrompt(root, "Key rejected — check it and try again.", () => renderValue(root, params));
+        } finally {
+          refreshBtn.disabled = false;
+        }
+      },
+    });
+    root.replaceChildren(
+      leagueChips(selected, (key) => renderValue(root, new URLSearchParams(`league=${key}`)), pool),
+      el("div", { class: "meta-row" }, [refreshBtn, quotaBadge]),
+      syncMsg,
+      list,
+    );
+    if (selected) await loadValueList(list, selected, quotaBadge);
+  } catch (err) {
+    root.replaceChildren(errorBox(err));
+  }
+}
+
+async function loadValueList(list, league, quotaBadge) {
+  list.replaceChildren(loading());
+  try {
+    const data = await api(`/api/value?league=${encodeURIComponent(league)}`);
+    if (data.quotaRemaining != null) quotaBadge.textContent = `odds API quota: ${data.quotaRemaining} left`;
+    if (data.count === 0) {
+      list.replaceChildren(
+        el("div", { class: "card" }, [
+          el("h3", { text: "Nothing flagged" }),
+          el("p", { class: "note", text: "No +EV spots right now — most days have none. The model only flags when its probability beats the best available price by 4%+." }),
+        ]),
+      );
+      return;
+    }
+    list.replaceChildren(
+      ...data.opportunities.map((r) => {
+        const kickoff = new Date(r.utcDate).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+        const marketLabel = r.market === "h2h" ? "1X2" : `O/U ${r.line}`;
+        return el("div", { class: "card" }, [
+          el("div", { class: "row-between" }, [
+            el("div", {}, [
+              el("div", { text: `${r.homeTeam} vs ${r.awayTeam}` }),
+              el("div", { class: "small muted", text: kickoff }),
+            ]),
+            el("span", { class: "chip static", style: "border-color:var(--accent);color:var(--accent)", text: `+${(r.evPct * 100).toFixed(1)}% EV` }),
+          ]),
+          el("div", { class: "meta-row" }, [
+            el("span", { class: "chip static", text: `${marketLabel} · ${r.selection}` }),
+            el("span", { class: "chip static", text: `best ${num(r.bestOdds)}` }),
+            el("span", { class: "chip static", text: `model ${pct(r.modelProb)} (fair ${num(r.fairOdds)})` }),
+            el("span", { class: "chip static", text: `consensus ${num(r.consensusOdds)}` }),
+            el("span", { class: "chip static", text: `${r.bookmakers} books` }),
+            el("span", { style: "flex:1" }),
+            el("button", {
+              class: "btn btn-small",
+              text: "log bet",
+              onclick: () => {
+                state.betPrefill = {
+                  league,
+                  matchId: r.matchId,
+                  matchLabel: `${r.homeTeam} vs ${r.awayTeam}`,
+                  market: r.market === "h2h" ? "1X2" : "overUnder",
+                  selection: r.selection,
+                  line: r.line,
+                  odds: r.bestOdds,
+                };
+                location.hash = "#/bets";
+              },
+            }),
+          ]),
+        ]);
+      }),
+    );
+  } catch (err) {
+    if (err.data && err.data.code === "no_odds_synced") {
+      list.replaceChildren(
+        el("div", { class: "card" }, [
+          el("h3", { text: "No odds synced yet" }),
+          el("p", { class: "note", text: "Odds for this league haven't been fetched. Hit “Refresh odds” above to pull the latest EU bookmaker prices (uses 2 quota units)." }),
+        ]),
+      );
+    } else {
+      list.replaceChildren(errorBox(err));
+    }
+  }
+}
+
 /* ---------- router, nav, install, SW ---------- */
 
 function setActiveNav(name) {
@@ -639,6 +760,9 @@ function route() {
   } else if (path === "#/ratings") {
     setActiveNav("ratings");
     renderRatings(root, params);
+  } else if (path === "#/value") {
+    setActiveNav("value");
+    renderValue(root, params);
   } else if (path === "#/accuracy") {
     setActiveNav("accuracy");
     renderAccuracy(root);

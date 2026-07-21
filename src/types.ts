@@ -110,3 +110,40 @@ export class StatsRestrictedError extends Error {
     this.status = status;
   }
 }
+
+/** the-odds-api rejected the key or the key lacks access (401/403). */
+export class OddsRestrictedError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "OddsRestrictedError";
+    this.status = status;
+  }
+}
+
+/** the-odds-api failure; reuses the FootballDataError shape so routes map it
+ * identically (429 passes through, everything else is a bad gateway). */
+export class OddsApiError extends FootballDataError {
+  constructor(message: string, status: number, retryAfterSeconds?: number) {
+    super(message, status, retryAfterSeconds);
+    this.name = "OddsApiError";
+  }
+}
+
+/** Row of odds_snapshots joined to its match (with team names). */
+export interface OddsSnapshotRow {
+  id: number;
+  match_id: number;
+  market: string;
+  selection: string;
+  line: number | null;
+  best_odds: number;
+  consensus_odds: number;
+  bookmakers: number;
+  model_prob: number;
+  ev_pct: number;
+  fetched_at: string;
+  utc_date: string;
+  home_name: string;
+  away_name: string;
+}
