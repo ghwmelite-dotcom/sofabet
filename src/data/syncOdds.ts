@@ -11,6 +11,7 @@ import { gridToMarkets } from "../model/markets";
 import { getOrFitParams } from "../model/service";
 import {
   aggregatePrices,
+  dedupeEvents,
   evPct,
   gridProbTotalOver,
   matchEventToFixture,
@@ -139,7 +140,7 @@ export async function syncOddsLeagueWithClient(
   const rows: OddsSnapshotInsert[] = [];
   const unmatched: string[] = [];
 
-  for (const event of events) {
+  for (const event of dedupeEvents(events)) {
     const fixture = matchEventToFixture(event as EventLike, fixtureLikes);
     if (!fixture) {
       unmatched.push(`${event.home_team} vs ${event.away_team}`);

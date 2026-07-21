@@ -5,22 +5,67 @@
  */
 
 /**
- * NFD + strip diacritics → lowercase → strip punctuation → drop trailing
- * fc/afc/cf → collapse whitespace. Diacritics stripping makes cross-source
- * matching work ("São Paulo FC" vs "Sao Paulo").
+ * Club-designator tokens stripped anywhere in a name (exact token match only).
+ * Cross-source names differ mostly by these: "FC Augsburg" vs "Augsburg",
+ * "Olympique de Marseille" vs "Marseille", "VfB Stuttgart" vs "Stuttgart".
+ */
+const CLUB_TOKENS = new Set([
+  "fc", "afc", "acf", "cf", "bc", "sc", "ac", "as", "sv", "ss", "rc", "ca", "cd", "ud", "bk", "fk", "sk", "nk",
+  "vfb", "vfl", "tsg", "us", "es", "sco", "osc", "stade", "club", "deportivo", "olympique", "calcio", "de",
+  "la", "di",
+]);
+
+/** Stubborn same-club spellings that prefix-fuzzy can't bridge (exonyms). */
+const TOKEN_ALIASES = new Map<string, string>([
+  ["rennes", "rennais"],
+  ["munich", "munchen"],
+  ["cologne", "koln"],
+  ["seville", "sevilla"],
+]);
+
+/**
+ * NFD + strip diacritics → lowercase → strip punctuation → drop "and" →
+ * remove club-designator tokens → collapse whitespace. Diacritics stripping
+ * makes cross-source matching work ("São Paulo FC" vs "Sao Paulo",
+ * "Bayern München" vs "Bayern Munchen").
  */
 export function normalizeTeamName(name: string): string {
-  return name
+  const base = name
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9 ]+/g, " ")
     // "Brighton & Hove Albion FC" (D1) vs "Brighton and Hove Albion" (odds):
     // drop standalone "and" so both reduce to the same tokens.
     .replace(/\band\b/g, " ")
-    .replace(/\s+(fc|afc|cf)\s*$/g, "")
     .replace(/\s+/g, " ")
     .trim();
+  return base
+    .split(" ")
+    .filter((t) => t.length > 0 && !CLUB_TOKENS.has(t))
+    .map((t) => TOKEN_ALIASES.get(t) ?? t)
+    .join(" ");
+}
+
+/** Exact, or prefix of the other when the shorter token has >= 4 chars
+ *  ("lyon"~"lyonnais", "milan"~"milano", "munich"~"munchen", "inter"~"internazionale"). */
+function tokenMatch(a: string, b: string): boolean {
+  if (a === b) return true;
+  const [s, l] = a.length <= b.length ? [a, b] : [b, a];
+  return s.length >= 4 && l.startsWith(s);
+}
+
+/**
+ * Do two team names refer to the same club? The smaller token set must be
+ * fully explained by the larger one under tokenMatch ("PEC Zwolle" ⊇
+ * "Zwolle", "Stade Brestois 29" ⊇ "Brest" via brest~brestois).
+ */
+export function teamNamesAlign(a: string, b: string): boolean {
+  const ta = normalizeTeamName(a).split(" ").filter(Boolean);
+  const tb = normalizeTeamName(b).split(" ").filter(Boolean);
+  if (ta.length === 0 || tb.length === 0) return false;
+  const [small, big] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+  return small.every((t) => big.some((u) => tokenMatch(t, u)));
 }
 
 export interface FixtureLike {
@@ -40,9 +85,10 @@ export interface EventLike {
 export const MATCH_TIME_TOLERANCE_MS = 3 * 60 * 60 * 1000; // 3h
 
 /**
- * Match an odds event to a D1 fixture: exact normalized home+away pair first,
- * then a contains-match fallback (either direction), and always require the
- * kickoff times to be within 3h. Returns null when nothing qualifies.
+ * Match an odds event to a D1 fixture. Candidates must kick off within 3h;
+ * exact normalized pairs beat token-aligned pairs, then fewest extra tokens,
+ * then nearest in time (so "Paris FC" never lands on a PSG fixture when the
+ * real Paris FC fixture exists). Returns null when nothing qualifies.
  */
 export function matchEventToFixture(
   event: EventLike,
@@ -52,20 +98,38 @@ export function matchEventToFixture(
   const eh = normalizeTeamName(event.home_team);
   const ea = normalizeTeamName(event.away_team);
   if (!eh || !ea) return null;
-  const pairs = fixtures.map((f) => ({
-    f,
-    h: normalizeTeamName(f.homeTeamName),
-    a: normalizeTeamName(f.awayTeamName),
-  }));
-  let candidates = pairs.filter((p) => p.h === eh && p.a === ea);
-  if (candidates.length === 0) {
-    const contains = (x: string, y: string) => x.includes(y) || y.includes(x);
-    candidates = pairs.filter((p) => contains(p.h, eh) && contains(p.a, ea));
+  const eventMs = Date.parse(event.commence_time);
+  const scored: { f: FixtureLike; exact: boolean; delta: number; dt: number }[] = [];
+  for (const f of fixtures) {
+    const dt = Math.abs(Date.parse(f.utcDate) - eventMs);
+    if (dt > toleranceMs) continue;
+    const fh = normalizeTeamName(f.homeTeamName);
+    const fa = normalizeTeamName(f.awayTeamName);
+    if (fh === eh && fa === ea) {
+      scored.push({ f, exact: true, delta: 0, dt });
+    } else if (
+      teamNamesAlign(event.home_team, f.homeTeamName) &&
+      teamNamesAlign(event.away_team, f.awayTeamName)
+    ) {
+      const delta =
+        Math.abs(fh.split(" ").length - eh.split(" ").length) + Math.abs(fa.split(" ").length - ea.split(" ").length);
+      scored.push({ f, exact: false, delta, dt });
+    }
   }
-  const within = candidates.filter(
-    (p) => Math.abs(Date.parse(p.f.utcDate) - Date.parse(event.commence_time)) <= toleranceMs,
-  );
-  return within.length > 0 ? within[0].f : null;
+  if (scored.length === 0) return null;
+  scored.sort((x, y) => Number(y.exact) - Number(x.exact) || x.delta - y.delta || x.dt - y.dt);
+  return scored[0].f;
+}
+
+/** Some feeds emit duplicate events for one match — keep the one with the most bookmakers. */
+export function dedupeEvents<T extends EventLike & { bookmakers?: unknown[] }>(events: T[]): T[] {
+  const best = new Map<string, T>();
+  for (const e of events) {
+    const key = `${normalizeTeamName(e.home_team)}|${normalizeTeamName(e.away_team)}`;
+    const prev = best.get(key);
+    if (!prev || (e.bookmakers?.length ?? 0) > (prev.bookmakers?.length ?? 0)) best.set(key, e);
+  }
+  return [...best.values()];
 }
 
 /** Overround removal: fair implied probabilities from decimal prices. */

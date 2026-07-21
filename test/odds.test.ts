@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregatePrices,
+  dedupeEvents,
   evPct,
   fairImplied,
   gridProbTotalOver,
@@ -9,21 +10,61 @@ import {
   matchEventToFixture,
   normalizeTeamName,
   resolveSportByTitle,
+  teamNamesAlign,
 } from "../src/model/odds";
 import type { FixtureLike } from "../src/model/odds";
 import { predictScoreGrid } from "../src/model/dixonColes";
 
 describe("normalizeTeamName", () => {
-  it("lowercases, strips punctuation, drops trailing fc/afc/cf, collapses whitespace", () => {
+  it("lowercases, strips punctuation and club-designator tokens, collapses whitespace", () => {
     expect(normalizeTeamName("Manchester United")).toBe("manchester united");
     expect(normalizeTeamName("Manchester United FC")).toBe("manchester united");
     expect(normalizeTeamName("Wolverhampton Wanderers")).toBe("wolverhampton wanderers");
-    expect(normalizeTeamName("AFC Bournemouth")).toBe("afc bournemouth"); // leading AFC is part of the name
+    expect(normalizeTeamName("AFC Bournemouth")).toBe("bournemouth"); // designator tokens go anywhere
     expect(normalizeTeamName("Brighton & Hove Albion")).toBe("brighton hove albion");
-    expect(normalizeTeamName("1. FC Köln")).toBe("1 fc koln");
+    expect(normalizeTeamName("1. FC Köln")).toBe("1 koln");
     expect(normalizeTeamName("São Paulo FC")).toBe("sao paulo");
     expect(normalizeTeamName("Paris  Saint-Germain")).toBe("paris saint germain");
     expect(normalizeTeamName("Sheffield United AFC")).toBe("sheffield united");
+    expect(normalizeTeamName("Club Atlético de Madrid")).toBe("atletico madrid");
+    expect(normalizeTeamName("Olympique de Marseille")).toBe("marseille");
+    expect(normalizeTeamName("Rennes")).toBe("rennais"); // token alias
+    expect(normalizeTeamName("Stade Rennais FC")).toBe("rennais");
+  });
+});
+
+describe("teamNamesAlign (real cross-source pairs seen in production)", () => {
+  const aligned: [string, string][] = [
+    ["Bayern Munich", "FC Bayern München"],
+    ["Augsburg", "FC Augsburg"],
+    ["Marseille", "Olympique de Marseille"],
+    ["Lyon", "Olympique Lyonnais"],
+    ["Rennes", "Stade Rennais FC"],
+    ["Athletic Bilbao", "Athletic Club"],
+    ["Atlético Madrid", "Club Atlético de Madrid"],
+    ["Inter Milan", "FC Internazionale Milano"],
+    ["Brest", "Stade Brestois 29"],
+    ["Zwolle", "PEC Zwolle"],
+    ["Alavés", "Deportivo Alavés"],
+    ["Rayo Vallecano", "Rayo Vallecano de Madrid"],
+    ["Fiorentina", "ACF Fiorentina"],
+    ["Ajax", "AFC Ajax"],
+    ["Elversberg", "SV Elversberg"],
+    ["Sport-Club Freiburg", "SC Freiburg"],
+    ["Wolfsburg", "VfL Wolfsburg"],
+    ["Lecce", "US Lecce"],
+  ];
+  for (const [a, b] of aligned) {
+    it(`aligns "${a}" == "${b}"`, () => {
+      expect(teamNamesAlign(a, b)).toBe(true);
+      expect(teamNamesAlign(b, a)).toBe(true);
+    });
+  }
+
+  it("does not align different clubs", () => {
+    expect(teamNamesAlign("Real Madrid", "Real Sociedad")).toBe(false);
+    expect(teamNamesAlign("Manchester United", "Manchester City")).toBe(false);
+    expect(teamNamesAlign("Arsenal", "Aston Villa")).toBe(false);
   });
 });
 
@@ -41,7 +82,7 @@ describe("matchEventToFixture", () => {
     expect(hit?.id).toBe(1);
   });
 
-  it("matches via the contains fallback", () => {
+  it("matches via token alignment (leading designators, missing tokens)", () => {
     const hit = matchEventToFixture(
       { id: "e2", home_team: "FC Köln", away_team: "Wolfsburg", commence_time: "2026-08-15T17:30:00Z" },
       fixtures,
@@ -63,6 +104,43 @@ describe("matchEventToFixture", () => {
       fixtures,
     );
     expect(hit).toBeNull();
+  });
+
+  it("prefers the exact fixture over a token-aligned lookalike (Paris FC vs PSG)", () => {
+    const fs: FixtureLike[] = [
+      { id: 10, utcDate: "2026-08-15T15:00:00Z", homeTeamName: "Paris FC", awayTeamName: "Le Mans FC" },
+      { id: 11, utcDate: "2026-08-15T15:00:00Z", homeTeamName: "Paris Saint-Germain FC", awayTeamName: "FC Metz" },
+    ];
+    const hit = matchEventToFixture(
+      { id: "e5", home_team: "Paris FC", away_team: "Le Mans", commence_time: "2026-08-15T15:00:00Z" },
+      fs,
+    );
+    expect(hit?.id).toBe(10);
+  });
+
+  it("returns null when only a different same-city club is in the fixture list", () => {
+    const fs: FixtureLike[] = [
+      { id: 20, utcDate: "2026-08-15T15:00:00Z", homeTeamName: "Real Sociedad", awayTeamName: "Getafe CF" },
+    ];
+    const hit = matchEventToFixture(
+      { id: "e6", home_team: "Real Madrid", away_team: "Getafe", commence_time: "2026-08-15T15:00:00Z" },
+      fs,
+    );
+    expect(hit).toBeNull();
+  });
+});
+
+describe("dedupeEvents", () => {
+  it("collapses duplicate matches keeping the one with the most bookmakers", () => {
+    const events = [
+      { id: "a", home_team: "Alavés", away_team: "Getafe", commence_time: "t", bookmakers: [1, 2] },
+      { id: "b", home_team: "Deportivo Alavés", away_team: "Getafe CF", commence_time: "t", bookmakers: [1, 2, 3] },
+      { id: "c", home_team: "Sevilla", away_team: "Rayo Vallecano", commence_time: "t", bookmakers: [1] },
+    ];
+    const out = dedupeEvents(events);
+    expect(out.length).toBe(2);
+    expect(out.some((e) => e.id === "b")).toBe(true);
+    expect(out.some((e) => e.id === "a")).toBe(false);
   });
 });
 
