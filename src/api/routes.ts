@@ -87,7 +87,7 @@ function requireSyncKey(env: Env, request: Request): void {
   }
 }
 
-async function handleSync(url: URL, env: Env, ctx: ExecutionContext, request: Request): Promise<Response> {
+async function handleSync(url: URL, env: Env, request: Request): Promise<Response> {
   requireSyncKey(env, request);
   const league = requireLeagueParam(url);
   const seasons = parseSeasons(url);
@@ -96,27 +96,12 @@ async function handleSync(url: URL, env: Env, ctx: ExecutionContext, request: Re
     throw new HttpError(500, "FOOTBALL_DATA_TOKEN secret is not configured");
   }
   if (league === "ALL") {
-    // Rate-limited sequential loop; runs in the background after responding.
-    ctx.waitUntil(
-      syncAllLeagues(env.DB, token, seasons)
-        .then((results) => {
-          console.log(JSON.stringify({ message: "sync all finished", seasons, results }));
-        })
-        .catch((e: unknown) => {
-          console.error(
-            JSON.stringify({ message: "sync all failed", error: e instanceof Error ? e.message : String(e) }),
-          );
-        }),
-    );
-    return json(
-      {
-        ok: true,
-        message:
-          "sync started for all leagues in the background (throttled to <10 req/min; this takes minutes). Check GET /api/leagues for counts.",
-        seasons,
-      },
-      202,
-    );
+    // Synchronous by design: ctx.waitUntil() work after a response is cut off
+    // after ~30s, which silently killed the throttled loop mid-sync. Held open,
+    // the request survives the ~2-3 min the throttled loop needs (I/O-bound).
+    const results = await syncAllLeagues(env.DB, token, seasons);
+    const okCount = results.filter((r) => r.ok).length;
+    return json({ ok: okCount === results.length, synced: okCount, failed: results.length - okCount, seasons, results });
   }
   requireRegisteredLeague(league);
   const client = new FootballDataClient(token);
@@ -203,7 +188,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
   try {
     if (path === "/api/health" && method === "GET") return json({ ok: true });
     if (path === "/api/leagues" && method === "GET") return await handleLeagues(env);
-    if (path === "/api/sync" && method === "POST") return await handleSync(url, env, ctx, request);
+    if (path === "/api/sync" && method === "POST") return await handleSync(url, env, request);
     if (path === "/api/fixtures" && method === "GET") return await handleFixtures(url, env);
     if (path === "/api/predict" && method === "GET") return await handlePredict(url, env);
     if (path === "/api/backtest" && method === "GET") return await handleBacktest(url, env);

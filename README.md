@@ -40,8 +40,9 @@ npx wrangler d1 create sofabet-db
 npx wrangler secret put FOOTBALL_DATA_TOKEN
 npx wrangler d1 migrations apply sofabet-db --remote
 npx wrangler deploy
-# 3. Load data (runs in the background, throttled; takes minutes):
-curl -X POST "https://<your-worker>.workers.dev/api/sync?league=all&seasons=2"
+# 3. Load data (one open request, throttled to <10 req/min; takes ~2-3 min):
+curl -X POST -H "Authorization: Bearer <SYNC_KEY>" \
+  "https://<your-worker>.workers.dev/api/sync?league=all&seasons=2"
 # 4. Use the API, e.g.:
 curl "https://<your-worker>.workers.dev/api/predict?league=PL&home=Arsenal&away=Chelsea"
 ```
@@ -72,7 +73,7 @@ All responses are JSON. Errors are `{"error": "..."}` with a sensible status.
 |---|---|
 | `GET /api/health` | `{ok: true}` |
 | `GET /api/leagues` | League registry + per-league match counts in D1 |
-| `POST /api/sync?league=PL[&seasons=2]` | Sync one league from football-data.org. `league=all` syncs all leagues in the background (202, throttled). `seasons=N` also fetches N-1 previous seasons (backtest depth) |
+| `POST /api/sync?league=PL[&seasons=2]` | Sync one league from football-data.org. Requires `Authorization: Bearer <SYNC_KEY>` when that secret is set. `league=all` syncs every league in one held-open request (throttled to <10 req/min, ~2-3 min). `seasons=N` also fetches N-1 previous seasons (backtest depth) |
 | `GET /api/fixtures?league=PL` | Scheduled fixtures from D1 with model predictions attached |
 | `GET /api/predict?league=PL&home=<name\|id>&away=<name\|id>` | Full markets (1X2, BTTS, over/under 0.5–4.5, top 5 correct scores), expected goals, model freshness |
 | `GET /api/model/:league` | Fitted ratings table (attack/defence per team, home advantage, rho, fitted_at, match_count) |
