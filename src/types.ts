@@ -34,6 +34,16 @@ export interface ModelMatch {
   utcDate: string;
 }
 
+/** A finished match with booked-yellow counts — the cards model's input. */
+export interface CardMatch {
+  homeTeamId: number;
+  awayTeamId: number;
+  homeYellow: number;
+  awayYellow: number;
+  /** ISO 8601 date string. */
+  utcDate: string;
+}
+
 /** A match as ingested from the upstream API, before D1 id resolution. */
 export interface IngestedMatch {
   apiId: number;
@@ -70,5 +80,15 @@ export class FootballDataError extends Error {
     this.name = "FootballDataError";
     this.status = status;
     this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+/** Match-detail (bookings) endpoint is restricted on the current API tier. */
+export class StatsRestrictedError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "StatsRestrictedError";
+    this.status = status;
   }
 }

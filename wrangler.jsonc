@@ -10,8 +10,9 @@
     "enabled": true,
     "logs": { "enabled": true, "head_sampling_rate": 1 }
   },
-  // Daily sync + model refit at 04:17 UTC (off-:00/:30 to avoid the rush).
-  "triggers": { "crons": ["17 4 * * *"] },
+  // Daily sync + model refit at 04:17 UTC, plus an hourly bookings backfill
+  // at :47 (both off-:00/:30 to avoid the rush).
+  "triggers": { "crons": ["17 4 * * *", "47 * * * *"] },
   "d1_databases": [
     {
       "binding": "DB",

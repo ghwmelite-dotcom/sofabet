@@ -6,13 +6,14 @@
 
 import { LEAGUES } from "../config";
 import { FootballDataClient } from "../data/footballData";
-import { getMatchCountsByLeague, getScheduledMatches, getTeams } from "../data/repo";
+import { countPendingStats, getMatchCountsByLeague, getScheduledMatches, getStatsCoverage, getTeams } from "../data/repo";
 import { syncAllLeagues, syncLeague } from "../data/sync";
+import { syncStatsBatch } from "../data/syncStats";
 import { InsufficientDataError } from "../model/backtest";
 import { predictScoreGrid } from "../model/dixonColes";
 import { gridToMarkets } from "../model/markets";
-import { backtestLeague, getOrFitParams, predictMatch } from "../model/service";
-import { FootballDataError, HttpError } from "../types";
+import { backtestLeague, getOrFitCards, getOrFitParams, predictMatch } from "../model/service";
+import { FootballDataError, HttpError, StatsRestrictedError } from "../types";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -50,6 +51,16 @@ function parseSeasons(url: URL): number {
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1 || n > 5) {
     throw new HttpError(400, "'seasons' must be an integer between 1 and 5");
+  }
+  return n;
+}
+
+function parseLimit(url: URL): number {
+  const raw = url.searchParams.get("limit");
+  if (raw === null) return 70;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 200) {
+    throw new HttpError(400, "'limit' must be an integer between 1 and 200");
   }
   return n;
 }
@@ -109,6 +120,55 @@ async function handleSync(url: URL, env: Env, request: Request): Promise<Respons
   return json(result);
 }
 
+/**
+ * POST /api/sync-stats?league=PL[&limit=70] — SYNC_KEY-protected, synchronous.
+ * Backfills bookings for up to `limit` FINISHED matches (throttled; ~6.5s per
+ * match). 429 upstream stops the batch gracefully and returns partial counts;
+ * a tier-restricted detail endpoint returns 403 with restricted: true.
+ */
+async function handleSyncStats(url: URL, env: Env, request: Request): Promise<Response> {
+  requireSyncKey(env, request);
+  const league = requireLeagueParam(url);
+  const limit = parseLimit(url);
+  const token = env.FOOTBALL_DATA_TOKEN;
+  if (!token) {
+    throw new HttpError(500, "FOOTBALL_DATA_TOKEN secret is not configured");
+  }
+  if (league !== "ALL") requireRegisteredLeague(league);
+  const scope = league === "ALL" ? "all" : league;
+  const client = new FootballDataClient(token);
+  try {
+    const result = await syncStatsBatch(env.DB, client, scope, limit);
+    return json({ ok: true, ...result });
+  } catch (e) {
+    if (e instanceof StatsRestrictedError) {
+      const leagues = scope === "all" ? Object.keys(LEAGUES) : [scope];
+      const remaining = await countPendingStats(env.DB, leagues);
+      return json({ ok: false, error: e.message, restricted: true, stored: 0, remaining }, 403);
+    }
+    throw e;
+  }
+}
+
+/** GET /api/stats-coverage — bookings backfill coverage per league. */
+async function handleStatsCoverage(env: Env): Promise<Response> {
+  const rows = await getStatsCoverage(env.DB);
+  const byLeague = new Map(rows.map((r) => [r.league, r]));
+  const keys = [...new Set([...Object.keys(LEAGUES), ...rows.map((r) => r.league)])].sort();
+  const leagues = keys.map((key) => {
+    const row = byLeague.get(key);
+    const finished = row?.finished ?? 0;
+    const stats = row?.stats ?? 0;
+    return {
+      league: key,
+      finished,
+      stats,
+      pct: finished > 0 ? Math.round((stats / finished) * 1000) / 10 : 0,
+    };
+  });
+  return json({ leagues });
+}
+
 async function handleFixtures(url: URL, env: Env): Promise<Response> {
   const league = requireLeagueParam(url);
   await requireKnownLeague(env, league);
@@ -139,6 +199,12 @@ async function handleFixtures(url: URL, env: Env): Promise<Response> {
         expectedHomeGoals: markets.expectedHomeGoals,
         expectedAwayGoals: markets.expectedAwayGoals,
         mostLikelyScore: markets.topScores[0] ?? null,
+        doubleChance: markets.doubleChance,
+        // "Handicap straight win": home -0.5 (== home win) and away +0.5 (== X2).
+        asianHandicap: {
+          home: markets.asianHandicap.home.find((l) => l.line === -0.5) ?? null,
+          away: markets.asianHandicap.away.find((l) => l.line === 0.5) ?? null,
+        },
       },
     };
   });
@@ -157,14 +223,20 @@ async function handlePredict(url: URL, env: Env): Promise<Response> {
   return json(prediction);
 }
 
-async function handleModel(league: string, env: Env): Promise<Response> {
+async function handleModel(league: string, url: URL, env: Env): Promise<Response> {
   await requireKnownLeague(env, league);
-  const { params, meta } = await getOrFitParams(env.DB, league);
+  const kind = url.searchParams.get("kind") ?? "goals";
+  if (kind !== "goals" && kind !== "cards") {
+    throw new HttpError(400, "'kind' must be 'goals' or 'cards'");
+  }
+  const { params, meta } =
+    kind === "cards" ? await getOrFitCards(env.DB, league) : await getOrFitParams(env.DB, league);
   const teams = await getTeams(env.DB, league);
   const nameById = new Map(teams.map((t) => [t.id, t.name]));
   // Net-strength ranking: alpha_i + beta_i (log-goal supremacy over a league-
   // average opponent, up to a constant). Sign convention: higher attack =
   // scores more; higher defence = concedes FEWER (opponent xG carries -beta).
+  // For cards: attack = collects yellows; defence = makes opponents collect.
   const ratings = params.teamIds
     .map((id, i) => ({
       teamId: id,
@@ -174,7 +246,7 @@ async function handleModel(league: string, env: Env): Promise<Response> {
       rating: params.attack[i] + params.defence[i],
     }))
     .sort((a, b) => b.rating - a.rating);
-  return json({ league, homeAdv: params.homeAdv, rho: params.rho, ratings, model: meta });
+  return json({ league, kind, homeAdv: params.homeAdv, rho: params.rho, ratings, model: meta });
 }
 
 async function handleBacktest(url: URL, env: Env): Promise<Response> {
@@ -192,11 +264,13 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
     if (path === "/api/health" && method === "GET") return json({ ok: true });
     if (path === "/api/leagues" && method === "GET") return await handleLeagues(env);
     if (path === "/api/sync" && method === "POST") return await handleSync(url, env, request);
+    if (path === "/api/sync-stats" && method === "POST") return await handleSyncStats(url, env, request);
+    if (path === "/api/stats-coverage" && method === "GET") return await handleStatsCoverage(env);
     if (path === "/api/fixtures" && method === "GET") return await handleFixtures(url, env);
     if (path === "/api/predict" && method === "GET") return await handlePredict(url, env);
     if (path === "/api/backtest" && method === "GET") return await handleBacktest(url, env);
     const modelMatch = /^\/api\/model\/([A-Za-z0-9]+)$/.exec(path);
-    if (modelMatch && method === "GET") return await handleModel(modelMatch[1].toUpperCase(), env);
+    if (modelMatch && method === "GET") return await handleModel(modelMatch[1].toUpperCase(), url, env);
     if (path.startsWith("/api/")) throw new HttpError(404, `no route for ${method} ${path}`);
     throw new HttpError(404, "not found; try /api/health or /api/leagues");
   } catch (e) {
@@ -215,6 +289,9 @@ function errorResponse(e: unknown, path: string): Response {
     // 429 from upstream is meaningful to callers; anything else is a bad gateway.
     const status = e.status === 429 ? 429 : 502;
     return json({ error: e.message, retryAfterSeconds: e.retryAfterSeconds ?? null }, status);
+  }
+  if (e instanceof StatsRestrictedError) {
+    return json({ error: e.message, restricted: true }, 403);
   }
   const message = e instanceof Error ? e.message : String(e);
   console.error(JSON.stringify({ message: "unhandled error", path, error: message }));

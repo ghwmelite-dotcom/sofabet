@@ -4,7 +4,7 @@
  * an argument — no global state.
  */
 
-import type { IngestedMatch, MatchRow, ModelMatch, TeamRow } from "../types";
+import type { CardMatch, IngestedMatch, MatchRow, ModelMatch, TeamRow } from "../types";
 
 const BATCH_CHUNK = 50;
 
@@ -154,13 +154,17 @@ export async function getMatchCountsByLeague(db: D1Database): Promise<Map<string
 
 export interface ModelCacheRow {
   league: string;
+  kind: string;
   params_json: string;
   fitted_at: string;
   match_count: number;
 }
 
-export async function getModelCache(db: D1Database, league: string): Promise<ModelCacheRow | null> {
-  return db.prepare("SELECT * FROM model_cache WHERE league = ?").bind(league).first<ModelCacheRow>();
+export async function getModelCache(db: D1Database, league: string, kind = "goals"): Promise<ModelCacheRow | null> {
+  return db
+    .prepare("SELECT * FROM model_cache WHERE league = ? AND kind = ?")
+    .bind(league, kind)
+    .first<ModelCacheRow>();
 }
 
 export async function setModelCache(
@@ -169,15 +173,143 @@ export async function setModelCache(
   paramsJson: string,
   fittedAt: string,
   matchCount: number,
+  kind = "goals",
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO model_cache (league, params_json, fitted_at, match_count) VALUES (?, ?, ?, ?)
-       ON CONFLICT(league) DO UPDATE SET
+      `INSERT INTO model_cache (league, kind, params_json, fitted_at, match_count) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(league, kind) DO UPDATE SET
          params_json = excluded.params_json,
          fitted_at = excluded.fitted_at,
          match_count = excluded.match_count`,
     )
-    .bind(league, paramsJson, fittedAt, matchCount)
+    .bind(league, kind, paramsJson, fittedAt, matchCount)
     .run();
+}
+
+/* ---- match_stats (bookings) ---- */
+
+export interface MatchStatsUpsert {
+  matchId: number;
+  homeYellow: number;
+  awayYellow: number;
+  homeRed: number;
+  awayRed: number;
+}
+
+export async function insertMatchStats(db: D1Database, stats: MatchStatsUpsert, fetchedAt: string): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO match_stats (match_id, home_yellow, away_yellow, home_red, away_red, fetched_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(match_id) DO NOTHING`,
+    )
+    .bind(stats.matchId, stats.homeYellow, stats.awayYellow, stats.homeRed, stats.awayRed, fetchedAt)
+    .run();
+}
+
+export interface PendingStatsMatch {
+  id: number;
+  api_id: number;
+  league: string;
+  utc_date: string;
+}
+
+/** FINISHED matches in `leagues` with no match_stats row yet, newest first. */
+export async function getPendingStatsMatches(
+  db: D1Database,
+  leagues: string[],
+  limit: number,
+): Promise<PendingStatsMatch[]> {
+  if (leagues.length === 0) return [];
+  const placeholders = leagues.map(() => "?").join(", ");
+  const { results } = await db
+    .prepare(
+      `SELECT m.id, m.api_id, m.league, m.utc_date
+       FROM matches m
+       LEFT JOIN match_stats s ON s.match_id = m.id
+       WHERE m.status = 'FINISHED' AND s.match_id IS NULL AND m.league IN (${placeholders})
+       ORDER BY m.utc_date DESC
+       LIMIT ?`,
+    )
+    .bind(...leagues, limit)
+    .all<PendingStatsMatch>();
+  return results;
+}
+
+/** Count of FINISHED matches in `leagues` still missing match_stats. */
+export async function countPendingStats(db: D1Database, leagues: string[]): Promise<number> {
+  if (leagues.length === 0) return 0;
+  const placeholders = leagues.map(() => "?").join(", ");
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS c
+       FROM matches m
+       LEFT JOIN match_stats s ON s.match_id = m.id
+       WHERE m.status = 'FINISHED' AND s.match_id IS NULL AND m.league IN (${placeholders})`,
+    )
+    .bind(...leagues)
+    .first<{ c: number }>();
+  return row?.c ?? 0;
+}
+
+export interface StatsCoverageRow {
+  league: string;
+  finished: number;
+  stats: number;
+}
+
+/** Per-league finished-match and bookings coverage counts. */
+export async function getStatsCoverage(db: D1Database): Promise<StatsCoverageRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT m.league AS league, COUNT(*) AS finished, COUNT(s.match_id) AS stats
+       FROM matches m
+       LEFT JOIN match_stats s ON s.match_id = m.id
+       WHERE m.status = 'FINISHED'
+       GROUP BY m.league
+       ORDER BY m.league ASC`,
+    )
+    .all<StatsCoverageRow>();
+  return results;
+}
+
+/** Matches with booked-yellow counts, oldest first — the cards model's training input. */
+export async function getCardTrainingRows(db: D1Database, league: string): Promise<CardMatch[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT m.home_team_id, m.away_team_id, s.home_yellow, s.away_yellow, m.utc_date
+       FROM match_stats s
+       JOIN matches m ON m.id = s.match_id
+       WHERE m.league = ? AND s.home_yellow IS NOT NULL AND s.away_yellow IS NOT NULL
+       ORDER BY m.utc_date ASC`,
+    )
+    .bind(league)
+    .all<{
+      home_team_id: number;
+      away_team_id: number;
+      home_yellow: number;
+      away_yellow: number;
+      utc_date: string;
+    }>();
+  return results.map((r) => ({
+    homeTeamId: r.home_team_id,
+    awayTeamId: r.away_team_id,
+    homeYellow: r.home_yellow,
+    awayYellow: r.away_yellow,
+    utcDate: r.utc_date,
+  }));
+}
+
+export async function countCardStats(db: D1Database, league: string): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS c
+       FROM match_stats s
+       JOIN matches m ON m.id = s.match_id
+       WHERE m.league = ? AND s.home_yellow IS NOT NULL AND s.away_yellow IS NOT NULL`,
+    )
+    .bind(league)
+    .first<{ c: number }>();
+  return row?.c ?? 0;
 }

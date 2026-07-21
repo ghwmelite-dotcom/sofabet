@@ -5,8 +5,9 @@ as a JSON API on Cloudflare Workers + D1. Match results are ingested from the
 [football-data.org](https://www.football-data.org/) API; a per-league
 Dixon–Coles model (attack/defence ratings per team, home advantage, low-score
 correlation, exponential time decay) is fitted in the Worker, and the API
-serves 1X2 / BTTS / over-under / correct-score probabilities, expected goals,
-team ratings, and walk-forward backtests.
+serves 1X2 / BTTS / over-under / correct-score / double-chance / draw-no-bet /
+team-total / asian & european handicap probabilities, expected goals, a
+yellow-cards model, team ratings, and walk-forward backtests.
 
 ## What this is NOT
 
@@ -47,8 +48,8 @@ curl -X POST -H "Authorization: Bearer <SYNC_KEY>" \
 curl "https://<your-worker>.workers.dev/api/predict?league=PL&home=Arsenal&away=Chelsea"
 ```
 
-A daily cron (04:17 UTC) syncs all leagues and refits every model into
-`model_cache`.
+A daily cron (04:17 UTC) syncs all leagues and refits every goals model into
+`model_cache`; an hourly cron (:47) backfills bookings (see "Cards data").
 
 ## Local dev
 
@@ -74,22 +75,43 @@ All responses are JSON. Errors are `{"error": "..."}` with a sensible status.
 | `GET /api/health` | `{ok: true}` |
 | `GET /api/leagues` | League registry + per-league match counts in D1 |
 | `POST /api/sync?league=PL[&seasons=2]` | Sync one league from football-data.org. Requires `Authorization: Bearer <SYNC_KEY>` when that secret is set. `league=all` syncs every league in one held-open request (throttled to <10 req/min, ~2-3 min). `seasons=N` also fetches N-1 previous seasons (backtest depth) |
-| `GET /api/fixtures?league=PL` | Scheduled fixtures from D1 with model predictions attached |
-| `GET /api/predict?league=PL&home=<name\|id>&away=<name\|id>` | Full markets (1X2, BTTS, over/under 0.5–4.5, top 5 correct scores), expected goals, model freshness |
-| `GET /api/model/:league` | Fitted ratings table (attack/defence per team, home advantage, rho, fitted_at, match_count) |
+| `POST /api/sync-stats?league=PL[&limit=70]` | SYNC_KEY-protected, synchronous. Backfills bookings (`match_stats`) for up to `limit` FINISHED matches without stats, newest first (~6.5s/match). Returns `{stored, failed, remaining, rateLimited}`. Upstream 429 stops the batch gracefully (partial counts); a tier-restricted detail endpoint returns 403 `{restricted: true}` and inserts nothing |
+| `GET /api/stats-coverage` | Per league: finished match count, matches with bookings, coverage pct |
+| `GET /api/fixtures?league=PL` | Scheduled fixtures from D1 with model predictions attached (1X2, BTTS, O2.5, xG, most likely score, double chance, AH −0.5/+0.5) |
+| `GET /api/predict?league=PL&home=<name\|id>&away=<name\|id>` | Full markets: 1X2, BTTS, over/under 0.5–4.5, top 5 correct scores, double chance, draw-no-bet (with fair odds), team totals 0.5–3.5, asian handicap ladder −2..+2 step 0.25 (quarter lines = half-stake averages; fairOdds = (1−pPush)/pWin), european handicap −2..+2; expected goals; model freshness. Plus a `cards` block (expected yellows, total O/U 1.5–6.5, per-team O/U 1.5/2.5) once the league has ≥ 60 matches with bookings — otherwise `cards: null` with a `cardsCoverage` note |
+| `GET /api/model/:league[?kind=goals\|cards]` | Fitted ratings table (attack/defence per team, home advantage, rho, fitted_at, match_count). `kind=cards` returns the yellow-card ratings fitted on `match_stats` |
 | `GET /api/backtest?league=PL` | Walk-forward backtest: log loss / Brier / RPS for model vs base-rate baseline vs uniform, decile calibration table |
+
+## Cards data
+
+Bookings come from the football-data.org **match-detail endpoint**
+(`GET /v4/matches/{id}`, one call per match) — availability depends on your
+plan tier; a 401/403 there aborts the batch cleanly and nothing is stored.
+An hourly cron (`47 * * * *`) backfills up to 70 matches per run, newest
+first, so the ~5,500 historical matches take roughly **3 days** to fully
+backfill (`POST /api/sync-stats?league=all&limit=200` speeds it up manually).
+Counting convention: a `YELLOW_RED_CARD` (second yellow) counts as both a
+yellow and a red. **Corners and fouls are NOT available from
+football-data.org at any tier**, so there is no corners/fouls model.
 
 ## Model summary
 
-Per league, finished matches only. Parameters: attack α_i and defence β_i per
-team, home advantage γ, low-score correlation ρ (clamped to ±0.2).
+Goals — per league, finished matches only. Parameters: attack α_i and defence
+β_i per team, home advantage γ, low-score correlation ρ (clamped to ±0.2).
 λ = exp(α_home − β_away + γ), μ = exp(α_away − β_home). Weighted
 log-likelihood with the Dixon–Coles τ correction for 0-0/1-0/0-1/1-1, time
 decay exp(−0.0018·days), L2 penalty 1e-4, fitted by full-batch Adam
 (lr 0.05, ~1000 iterations), α re-centered to sum 0 each iteration.
-Predictions use an 11×11 normalized score grid. Cached in D1 (`model_cache`)
-and reused while fresh (< 6h and same finished-match count); otherwise refit
-on demand.
+Predictions use an 11×11 normalized score grid. Cached in D1 (`model_cache`,
+kind `goals`) and reused while fresh (< 6h and same finished-match count);
+otherwise refit on demand.
+
+Cards — same fitting shape but plain independent Poisson (no τ/ρ) on yellow
+counts: `cardsAttack` (tendency to collect yellows), `cardsDefence` (tendency
+to make opponents collect yellows), `cardsHomeAdv`. Shares the goals
+optimizer core (`fitBivariatePoisson` with `useTau: false`). Predictions use a
+13×13 (0..12) yellow grid; cached as kind `cards` with the same freshness
+rule keyed on the number of matches with bookings.
 
 Backtest: burn-in on the first 60 matches, then refit every 8 matches on an
 expanding window and predict the next block. Needs ≥ 150 finished matches.

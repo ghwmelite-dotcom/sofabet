@@ -4,7 +4,9 @@
  */
 
 import {
+  countCardStats,
   countFinishedMatches,
+  getCardTrainingRows,
   getFinishedMatches,
   getModelCache,
   getTeams,
@@ -12,6 +14,8 @@ import {
 } from "../data/repo";
 import { fitDixonColes, predictExpectedGoals, predictScoreGrid } from "./dixonColes";
 import type { FittedParams } from "./dixonColes";
+import { cardsGridToMarkets, fitCards, predictCardsGrid } from "./cards";
+import type { CardsMarkets } from "./cards";
 import { gridToMarkets } from "./markets";
 import type { Markets } from "./markets";
 import { runBacktest } from "./backtest";
@@ -21,6 +25,8 @@ import type { TeamRow } from "../types";
 
 const MODEL_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6h
 const MIN_MATCHES_TO_FIT = 30;
+/** Leagues need at least this many matches with bookings before cards predictions are served. */
+export const MIN_STATS_TO_FIT = 60;
 
 export interface ModelMeta {
   fittedAt: string;
@@ -56,24 +62,36 @@ async function fitAndStore(db: D1Database, league: string): Promise<FitResult> {
   }
   const params = fitDixonColes(matches);
   const fittedAt = new Date().toISOString();
-  await setModelCache(db, league, JSON.stringify(params), fittedAt, matches.length);
+  await setModelCache(db, league, JSON.stringify(params), fittedAt, matches.length, "goals");
   return { params, meta: { fittedAt, matchCount: matches.length, fromCache: false, ageSeconds: 0 } };
 }
 
-/**
- * Return fitted params for a league, using model_cache when it is fresh
- * (fitted within 6h AND match_count equals the current finished count);
- * otherwise refit, store, and return.
- */
-export async function getOrFitParams(
+async function fitCardsAndStore(db: D1Database, league: string): Promise<FitResult> {
+  const rows = await getCardTrainingRows(db, league);
+  if (rows.length < MIN_STATS_TO_FIT) {
+    throw new HttpError(
+      400,
+      `not enough matches with bookings for league ${league}: ${rows.length} (need >= ${MIN_STATS_TO_FIT}); run POST /api/sync-stats?league=${league} first`,
+    );
+  }
+  const params = fitCards(rows);
+  const fittedAt = new Date().toISOString();
+  await setModelCache(db, league, JSON.stringify(params), fittedAt, rows.length, "cards");
+  return { params, meta: { fittedAt, matchCount: rows.length, fromCache: false, ageSeconds: 0 } };
+}
+
+/** Generic fit-or-cache against model_cache for one (league, kind). */
+async function getOrFit(
   db: D1Database,
   league: string,
-  opts: { forceRefresh?: boolean } = {},
+  kind: "goals" | "cards",
+  currentCount: number,
+  refit: () => Promise<FitResult>,
+  opts: { forceRefresh?: boolean },
 ): Promise<FitResult> {
-  const finishedCount = await countFinishedMatches(db, league);
   if (!opts.forceRefresh) {
-    const cached = await getModelCache(db, league);
-    if (cached && cached.match_count === finishedCount) {
+    const cached = await getModelCache(db, league, kind);
+    if (cached && cached.match_count === currentCount) {
       const ageMs = Date.now() - Date.parse(cached.fitted_at);
       if (ageMs >= 0 && ageMs < MODEL_MAX_AGE_MS) {
         let parsed: unknown;
@@ -96,7 +114,34 @@ export async function getOrFitParams(
       }
     }
   }
-  return fitAndStore(db, league);
+  return refit();
+}
+
+/**
+ * Return fitted goals params for a league, using model_cache when it is fresh
+ * (fitted within 6h AND match_count equals the current finished count);
+ * otherwise refit, store, and return.
+ */
+export async function getOrFitParams(
+  db: D1Database,
+  league: string,
+  opts: { forceRefresh?: boolean } = {},
+): Promise<FitResult> {
+  const finishedCount = await countFinishedMatches(db, league);
+  return getOrFit(db, league, "goals", finishedCount, () => fitAndStore(db, league), opts);
+}
+
+/**
+ * Return fitted cards params for a league — same freshness rule as goals,
+ * keyed on the current number of matches with bookings.
+ */
+export async function getOrFitCards(
+  db: D1Database,
+  league: string,
+  opts: { forceRefresh?: boolean } = {},
+): Promise<FitResult> {
+  const statsCount = await countCardStats(db, league);
+  return getOrFit(db, league, "cards", statsCount, () => fitCardsAndStore(db, league), opts);
 }
 
 /** Force a refit + cache store (used by the cron handler). Returns null when
@@ -139,6 +184,11 @@ export function resolveTeam(teams: TeamRow[], query: string): ResolvedTeam {
   throw new HttpError(404, `team '${query}' not found. Known teams include: ${sample}`);
 }
 
+export interface CardsCoverage {
+  statsCount: number;
+  required: number;
+}
+
 export interface Prediction {
   league: string;
   home: ResolvedTeam;
@@ -147,6 +197,10 @@ export interface Prediction {
   expectedAwayGoals: number;
   markets: Markets;
   model: ModelMeta;
+  /** Yellow-card markets; null until the league has >= MIN_STATS_TO_FIT booked matches. */
+  cards: CardsMarkets | null;
+  cardsModel: ModelMeta | null;
+  cardsCoverage: CardsCoverage;
 }
 
 export async function predictMatch(
@@ -171,6 +225,26 @@ export async function predictMatch(
   const grid = predictScoreGrid(params, home.id, away.id);
   const markets = gridToMarkets(grid);
   const { lambda, mu } = predictExpectedGoals(params, home.id, away.id);
+
+  // Cards are best-effort: coverage below the threshold (or teams missing
+  // from the cards window) yields cards: null, never an error.
+  const statsCount = await countCardStats(db, league);
+  let cards: CardsMarkets | null = null;
+  let cardsModel: ModelMeta | null = null;
+  if (statsCount >= MIN_STATS_TO_FIT) {
+    try {
+      const cardsFit = await getOrFitCards(db, league);
+      if (cardsFit.params.teamIds.includes(home.id) && cardsFit.params.teamIds.includes(away.id)) {
+        cards = cardsGridToMarkets(predictCardsGrid(cardsFit.params, home.id, away.id));
+        cardsModel = cardsFit.meta;
+      }
+    } catch (e) {
+      console.error(
+        JSON.stringify({ message: "cards prediction failed", league, error: e instanceof Error ? e.message : String(e) }),
+      );
+    }
+  }
+
   return {
     league,
     home,
@@ -179,6 +253,9 @@ export async function predictMatch(
     expectedAwayGoals: mu,
     markets,
     model: meta,
+    cards,
+    cardsModel,
+    cardsCoverage: { statsCount, required: MIN_STATS_TO_FIT },
   };
 }
 

@@ -44,6 +44,15 @@ export interface FitOptions {
   referenceDate?: string;
 }
 
+export interface BivariateFitOptions extends FitOptions {
+  /**
+   * Apply the Dixon–Coles tau low-score correction and fit rho (default true).
+   * Pass false for plain independent bivariate Poisson (e.g. the cards model);
+   * rho then stays 0.
+   */
+  useTau?: boolean;
+}
+
 const DEFAULT_XI = 0.0018;
 const DEFAULT_L2 = 1e-4;
 const DEFAULT_ITERATIONS = 1000;
@@ -93,12 +102,23 @@ function clamp(value: number, lo: number, hi: number): number {
  * few matches the L2 penalty keeps parameters near zero (weak but sane).
  */
 export function fitDixonColes(matches: ModelMatch[], opts: FitOptions = {}): FittedParams {
+  return fitBivariatePoisson(matches, { ...opts, useTau: true });
+}
+
+/**
+ * Shared optimizer core: bivariate Poisson with per-team attack/defence,
+ * home advantage, exponential time decay, L2 penalty, full-batch Adam,
+ * alpha re-centered to sum 0 after each iteration. With `useTau: false`
+ * this is a plain independent Poisson fit (rho stays 0).
+ */
+export function fitBivariatePoisson(matches: ModelMatch[], opts: BivariateFitOptions = {}): FittedParams {
+  const useTau = opts.useTau ?? true;
   const iterations = opts.iterations ?? DEFAULT_ITERATIONS;
   const lr = opts.learningRate ?? DEFAULT_LR;
   const xi = opts.xi ?? DEFAULT_XI;
   const l2 = opts.l2 ?? DEFAULT_L2;
   if (matches.length === 0) {
-    throw new Error("fitDixonColes: need at least one match");
+    throw new Error("fitBivariatePoisson: need at least one match");
   }
 
   const teamIds = [...new Set(matches.flatMap((m) => [m.homeTeamId, m.awayTeamId]))].sort((a, b) => a - b);
@@ -172,7 +192,7 @@ export function fitDixonColes(matches: ModelMatch[], opts: FitOptions = {}): Fit
       let gRho = 0;
 
       // Dixon–Coles tau part (only for scores 0-0, 1-0, 0-1, 1-1).
-      if (x <= 1 && y <= 1) {
+      if (useTau && x <= 1 && y <= 1) {
         let t: number;
         let dtLam: number;
         let dtMu: number;
