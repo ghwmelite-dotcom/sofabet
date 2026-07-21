@@ -67,8 +67,10 @@ async function refreshSportMap(db: D1Database, client: OddsApiClient): Promise<R
   return map;
 }
 
-/** League key -> sport key, cached in meta; refreshed on miss. */
+/** League key -> sport key: config pin first, then meta cache, then /sports resolution. */
 async function sportKeyFor(db: D1Database, client: OddsApiClient, league: string): Promise<string> {
+  const pinned = LEAGUES[league]?.oddsSportKey;
+  if (pinned) return pinned;
   const cached = (await readSportMap(db))[league];
   if (cached) return cached;
   const refreshed = await refreshSportMap(db, client);
