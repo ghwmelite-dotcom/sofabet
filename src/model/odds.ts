@@ -12,7 +12,7 @@
 const CLUB_TOKENS = new Set([
   "fc", "afc", "acf", "cf", "bc", "sc", "ac", "as", "sv", "ss", "rc", "ca", "cd", "ud", "bk", "fk", "sk", "nk",
   "vfb", "vfl", "tsg", "us", "es", "sco", "osc", "stade", "club", "deportivo", "olympique", "calcio", "de",
-  "la", "di",
+  "la", "di", "rb",
 ]);
 
 /** Stubborn same-club spellings that prefix-fuzzy can't bridge (exonyms). */

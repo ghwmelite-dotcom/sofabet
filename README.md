@@ -94,7 +94,9 @@ The worker serves an installable PWA (vanilla JS, no build step) from
 non-API GET paths fall back to `index.html` (SPA). Open the worker URL in a
 browser and use the **Install** button (or the browser's install affordance).
 
-Screens: fixtures (probability bars, "+ bet" shortcut), value (+EV list with
+Screens (bottom tab bar on mobile, header tabs on desktop): fixtures (team
+crests, segmented 1X2 bar, "+ bet" shortcut; lands on the first league with
+fixtures inside 7 days, kickoffs in device-local time), value (+EV list with
 odds refresh), match detail (all markets incl. handicaps + cards), ratings,
 accuracy (lazy per-league backtests with a calibration chart), and bets.
 

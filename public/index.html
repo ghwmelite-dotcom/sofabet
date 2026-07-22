@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#0b1220" />
     <title>Sofabet</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -14,15 +14,37 @@
   <body>
     <header class="topbar">
       <a class="brand" href="#/fixtures">Sofabet</a>
-      <nav class="nav">
+      <nav class="topnav">
         <a href="#/fixtures" data-nav="fixtures">Fixtures</a>
         <a href="#/value" data-nav="value">Value</a>
+        <a href="#/bets" data-nav="bets">Bets</a>
         <a href="#/ratings" data-nav="ratings">Ratings</a>
         <a href="#/accuracy" data-nav="accuracy">Accuracy</a>
-        <a href="#/bets" data-nav="bets">Bets</a>
       </nav>
       <button id="installBtn" class="btn btn-small" hidden>Install</button>
     </header>
     <main id="app" class="container"></main>
+    <nav class="tabbar">
+      <a href="#/fixtures" data-nav="fixtures">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        <span>Fixtures</span>
+      </a>
+      <a href="#/value" data-nav="value">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></svg>
+        <span>Value</span>
+      </a>
+      <a href="#/bets" data-nav="bets">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v1a2 2 0 0 0 0 6v1a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-1a2 2 0 0 0 0-6V8z"/><line x1="12" y1="8" x2="12" y2="16"/></svg>
+        <span>Bets</span>
+      </a>
+      <a href="#/ratings" data-nav="ratings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="14"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="9"/></svg>
+        <span>Ratings</span>
+      </a>
+      <a href="#/accuracy" data-nav="accuracy">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg>
+        <span>Accuracy</span>
+      </a>
+    </nav>
   </body>
 </html>
