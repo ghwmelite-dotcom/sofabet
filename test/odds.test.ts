@@ -90,10 +90,22 @@ describe("matchEventToFixture", () => {
     expect(hit?.id).toBe(2);
   });
 
-  it("rejects matches outside the 72h window", () => {
+  it("accepts a unique league pairing despite multi-day date drift", () => {
     const hit = matchEventToFixture(
       { id: "e3", home_team: "Manchester United", away_team: "Fulham", commence_time: "2026-08-19T22:00:00Z" },
       fixtures,
+    );
+    expect(hit?.id).toBe(1); // pair occurs once per season — drift means one source has a stale date
+  });
+
+  it("rejects ambiguous duplicates when none are within 72h", () => {
+    const fs: FixtureLike[] = [
+      { id: 30, utcDate: "2026-08-20T15:00:00Z", homeTeamName: "Olympique Lyonnais", awayTeamName: "OGC Nice" },
+      { id: 31, utcDate: "2026-08-25T15:00:00Z", homeTeamName: "Olympique Lyonnais", awayTeamName: "OGC Nice" },
+    ];
+    const hit = matchEventToFixture(
+      { id: "e3c", home_team: "Lyon", away_team: "Nice", commence_time: "2026-08-15T15:00:00Z" },
+      fs,
     );
     expect(hit).toBeNull();
   });

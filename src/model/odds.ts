@@ -92,10 +92,12 @@ export interface EventLike {
 export const MATCH_TIME_TOLERANCE_MS = 72 * 60 * 60 * 1000; // 72h
 
 /**
- * Match an odds event to a D1 fixture. Candidates must kick off within 72h;
- * exact normalized pairs beat token-aligned pairs, then fewest extra tokens,
- * then nearest in time (so "Paris FC" never lands on a PSG fixture when the
- * real Paris FC fixture exists). Returns null when nothing qualifies.
+ * Match an odds event to a D1 fixture. A (home, away) pair occurs at most once
+ * per league season, so a UNIQUE exact/aligned pairing is accepted even when
+ * the two sources disagree on the date by days (football-data.org keeps
+ * placeholder dates on unconfirmed fixtures). With multiple aligned
+ * candidates (duplicated fixture data), only those within 72h compete:
+ * fewest extra tokens, then nearest in time. Null when nothing qualifies.
  */
 export function matchEventToFixture(
   event: EventLike,
@@ -106,26 +108,35 @@ export function matchEventToFixture(
   const ea = normalizeTeamName(event.away_team);
   if (!eh || !ea) return null;
   const eventMs = Date.parse(event.commence_time);
-  const scored: { f: FixtureLike; exact: boolean; delta: number; dt: number }[] = [];
+  const exact: { f: FixtureLike; dt: number }[] = [];
+  const aligned: { f: FixtureLike; delta: number; dt: number }[] = [];
   for (const f of fixtures) {
     const dt = Math.abs(Date.parse(f.utcDate) - eventMs);
-    if (dt > toleranceMs) continue;
     const fh = normalizeTeamName(f.homeTeamName);
     const fa = normalizeTeamName(f.awayTeamName);
     if (fh === eh && fa === ea) {
-      scored.push({ f, exact: true, delta: 0, dt });
+      exact.push({ f, dt });
     } else if (
       teamNamesAlign(event.home_team, f.homeTeamName) &&
       teamNamesAlign(event.away_team, f.awayTeamName)
     ) {
       const delta =
         Math.abs(fh.split(" ").length - eh.split(" ").length) + Math.abs(fa.split(" ").length - ea.split(" ").length);
-      scored.push({ f, exact: false, delta, dt });
+      aligned.push({ f, delta, dt });
     }
   }
-  if (scored.length === 0) return null;
-  scored.sort((x, y) => Number(y.exact) - Number(x.exact) || x.delta - y.delta || x.dt - y.dt);
-  return scored[0].f;
+  if (exact.length > 0) {
+    exact.sort((x, y) => x.dt - y.dt);
+    return exact[0].f;
+  }
+  if (aligned.length === 1) return aligned[0].f;
+  if (aligned.length > 1) {
+    const within = aligned
+      .filter((c) => c.dt <= toleranceMs)
+      .sort((x, y) => x.delta - y.delta || x.dt - y.dt);
+    return within.length > 0 ? within[0].f : null;
+  }
+  return null;
 }
 
 /** Some feeds emit duplicate events for one match — keep the one with the most bookmakers. */
