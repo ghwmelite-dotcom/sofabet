@@ -40,7 +40,8 @@ export interface OddsSyncResult {
   sportKey: string;
   events: number;
   matched: number;
-  unmatched: string[];
+  /** Unmatched events with their kickoff and the closest D1 fixture (for diagnosing drift). */
+  unmatched: { event: string; commenceTime: string; nearest: string | null; nearestHrs: number }[];
   snapshots: number;
   /** Matched events skipped because a team isn't in the fitted params (e.g. newly promoted). */
   skippedNoModel: number;
@@ -140,14 +141,28 @@ export async function syncOddsLeagueWithClient(
   const modelTeamIds = new Set(params.teamIds);
   const fetchedAt = new Date().toISOString();
   const rows: OddsSnapshotInsert[] = [];
-  const unmatched: string[] = [];
+  const unmatched: OddsSyncResult["unmatched"] = [];
   let skippedNoModel = 0;
   const uniqueEvents = dedupeEvents(events);
 
   for (const event of uniqueEvents) {
     const fixture = matchEventToFixture(event as EventLike, fixtureLikes);
     if (!fixture) {
-      unmatched.push(`${event.home_team} vs ${event.away_team}`);
+      let nearest: string | null = null;
+      let nearestHrs = Number.POSITIVE_INFINITY;
+      for (const f of fixtureLikes) {
+        const dH = Math.abs(Date.parse(f.utcDate) - Date.parse(event.commence_time)) / 3.6e6;
+        if (dH < nearestHrs) {
+          nearestHrs = dH;
+          nearest = `${f.homeTeamName} vs ${f.awayTeamName} @ ${f.utcDate}`;
+        }
+      }
+      unmatched.push({
+        event: `${event.home_team} vs ${event.away_team}`,
+        commenceTime: event.commence_time,
+        nearest,
+        nearestHrs: Number.isFinite(nearestHrs) ? Math.round(nearestHrs) : -1,
+      });
       continue;
     }
     const row = fixtureById.get(fixture.id);
