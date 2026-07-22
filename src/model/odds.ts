@@ -82,10 +82,17 @@ export interface EventLike {
   commence_time: string;
 }
 
-export const MATCH_TIME_TOLERANCE_MS = 3 * 60 * 60 * 1000; // 3h
+/**
+ * Kickoff tolerance for event↔fixture pairing. football-data.org sets
+ * placeholder times (whole matchday at 15:00Z) until schedules are confirmed,
+ * while bookmakers price real staggered kickoffs — so the window must span
+ * days, not hours. Within one league the same pair never plays twice in 72h,
+ * and the nearest-time tiebreak guards the theoretical edge case.
+ */
+export const MATCH_TIME_TOLERANCE_MS = 72 * 60 * 60 * 1000; // 72h
 
 /**
- * Match an odds event to a D1 fixture. Candidates must kick off within 3h;
+ * Match an odds event to a D1 fixture. Candidates must kick off within 72h;
  * exact normalized pairs beat token-aligned pairs, then fewest extra tokens,
  * then nearest in time (so "Paris FC" never lands on a PSG fixture when the
  * real Paris FC fixture exists). Returns null when nothing qualifies.

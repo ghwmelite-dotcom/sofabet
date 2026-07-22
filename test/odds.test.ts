@@ -90,12 +90,20 @@ describe("matchEventToFixture", () => {
     expect(hit?.id).toBe(2);
   });
 
-  it("rejects matches outside the 3h window", () => {
+  it("rejects matches outside the 72h window", () => {
     const hit = matchEventToFixture(
-      { id: "e3", home_team: "Manchester United", away_team: "Fulham", commence_time: "2026-08-15T22:00:00Z" },
+      { id: "e3", home_team: "Manchester United", away_team: "Fulham", commence_time: "2026-08-19T22:00:00Z" },
       fixtures,
     );
     expect(hit).toBeNull();
+  });
+
+  it("tolerates placeholder-vs-real kickoff drift inside 72h", () => {
+    const hit = matchEventToFixture(
+      { id: "e3b", home_team: "Manchester United", away_team: "Fulham", commence_time: "2026-08-16T20:00:00Z" },
+      fixtures,
+    );
+    expect(hit?.id).toBe(1);
   });
 
   it("rejects swapped home/away", () => {

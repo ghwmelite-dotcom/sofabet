@@ -42,6 +42,8 @@ export interface OddsSyncResult {
   matched: number;
   unmatched: string[];
   snapshots: number;
+  /** Matched events skipped because a team isn't in the fitted params (e.g. newly promoted). */
+  skippedNoModel: number;
   quotaRemaining: number | null;
   quotaUsed: number | null;
 }
@@ -139,15 +141,20 @@ export async function syncOddsLeagueWithClient(
   const fetchedAt = new Date().toISOString();
   const rows: OddsSnapshotInsert[] = [];
   const unmatched: string[] = [];
+  let skippedNoModel = 0;
+  const uniqueEvents = dedupeEvents(events);
 
-  for (const event of dedupeEvents(events)) {
+  for (const event of uniqueEvents) {
     const fixture = matchEventToFixture(event as EventLike, fixtureLikes);
     if (!fixture) {
       unmatched.push(`${event.home_team} vs ${event.away_team}`);
       continue;
     }
     const row = fixtureById.get(fixture.id);
-    if (!row || !modelTeamIds.has(row.home_team_id) || !modelTeamIds.has(row.away_team_id)) continue;
+    if (!row || !modelTeamIds.has(row.home_team_id) || !modelTeamIds.has(row.away_team_id)) {
+      skippedNoModel++;
+      continue;
+    }
     const grid = predictScoreGrid(params, row.home_team_id, row.away_team_id);
     const mk = gridToMarkets(grid);
     const modelH2h: Record<string, number> = { home: mk.homeWin, draw: mk.draw, away: mk.awayWin };
@@ -226,10 +233,11 @@ export async function syncOddsLeagueWithClient(
   return {
     league,
     sportKey,
-    events: events.length,
-    matched: events.length - unmatched.length,
+    events: uniqueEvents.length,
+    matched: uniqueEvents.length - unmatched.length,
     unmatched,
     snapshots: rows.length,
+    skippedNoModel,
     quotaRemaining: client.quotaRemaining,
     quotaUsed: client.quotaUsed,
   };
