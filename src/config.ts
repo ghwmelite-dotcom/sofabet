@@ -22,4 +22,7 @@ export const LEAGUES: Record<string, LeagueConfig> = {
   FL1: { name: "Ligue 1", fdOrgCode: "FL1", oddsSportKey: "soccer_france_ligue_one" },
   DED: { name: "Eredivisie", fdOrgCode: "DED", oddsSportKey: "soccer_netherlands_eredivisie" },
   PPL: { name: "Primeira Liga", fdOrgCode: "PPL", oddsSportKey: "soccer_portugal_primeira_liga" },
+  // Brazilian Série A — on both free tiers and plays Feb–Dec, i.e. it has live
+  // fixtures during the European summer break.
+  BSA: { name: "Brasileirão Série A", fdOrgCode: "BSA", oddsSportKey: "soccer_brazil_campeonato" },
 };
