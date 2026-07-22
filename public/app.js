@@ -4,6 +4,7 @@
 const state = {
   leagues: null, // cached /api/leagues payload
   fixturesByLeague: {}, // session cache of /api/fixtures per league
+  formByTeam: {}, // session cache of /api/form per "league:teamId"
   key: localStorage.getItem("sofabet_key") || "",
   betPrefill: null, // prefill handed to the bet form by "+ bet" buttons
 };
@@ -67,6 +68,57 @@ async function getFixtures(league) {
     state.fixturesByLeague[league] = await api(`/api/fixtures?league=${encodeURIComponent(league)}`);
   }
   return state.fixturesByLeague[league];
+}
+
+async function getForm(league, teamId) {
+  const key = `${league}:${teamId}`;
+  if (!state.formByTeam[key]) {
+    state.formByTeam[key] = await api(`/api/form?league=${encodeURIComponent(league)}&team=${teamId}`);
+  }
+  return state.formByTeam[key];
+}
+
+/* ---------- probability cells ---------- */
+
+/**
+ * Color ramp for probability cells: hue 4 (red) at/below neutral-0.25,
+ * 45 (amber) at neutral, 130 (green) at/above neutral+0.25.
+ * 1X2 cells use neutral 0.33, BTTS/totals 0.5.
+ */
+function probHue(p, neutral) {
+  const lo = Math.max(0, neutral - 0.25);
+  const hi = Math.min(1, neutral + 0.25);
+  if (p <= lo) return 4;
+  if (p >= hi) return 130;
+  if (p <= neutral) return 4 + ((p - lo) / (neutral - lo)) * (45 - 4);
+  return 45 + ((p - neutral) / (hi - neutral)) * (130 - 45);
+}
+
+function pcell(label, p, neutral = 0.5) {
+  const hue = probHue(p, neutral);
+  const confident = p >= Math.min(1, neutral + 0.25);
+  const alpha = confident ? 0.95 : 0.85;
+  const darkText = hue >= 35 && hue <= 60; // amber needs dark text for contrast
+  return el("span", {
+    class: `pcell${darkText ? " dark-text" : ""}`,
+    style: `background:hsl(${Math.round(hue)} 72% 42% / ${alpha})`,
+    title: `${label} ${pct(p)}`,
+    text: label,
+  });
+}
+
+function formDots(recent) {
+  return el(
+    "span",
+    { class: "form-dots" },
+    recent.map((g) =>
+      el("span", {
+        class: `fdot ${g.result}`,
+        title: `${g.homeAway === "home" ? "H" : "A"} vs ${g.opponentName}: ${g.goalsFor}–${g.goalsAgainst}`,
+        text: g.result,
+      }),
+    ),
+  );
 }
 
 function leagueChips(selected, onPick, leagues) {
@@ -188,13 +240,13 @@ async function renderFixtures(root, params) {
       if (!byDay.has(key)) byDay.set(key, []);
       byDay.get(key).push(f);
     }
-    let firstCard = true;
+    let firstRow = true;
     for (const [day, dayFixtures] of byDay) {
       root.append(el("div", { class: "date-header", text: dayHeader(dayFixtures[0].utcDate) }));
       void day;
       for (const f of dayFixtures) {
-        root.append(fixtureCard(selected, f, firstCard));
-        firstCard = false;
+        root.append(matchRow(selected, f, firstRow));
+        firstRow = false;
       }
     }
   } catch (err) {
@@ -202,44 +254,73 @@ async function renderFixtures(root, params) {
   }
 }
 
-function fixtureCard(league, f, isFirst) {
+const plusIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+
+function matchRow(league, f, isFirst) {
   const p = f.prediction;
   const matchHref = `#/match/${league}/${f.homeTeamId}/${f.awayTeamId}`;
   const live = f.status === "IN_PLAY" || f.status === "PAUSED";
+  const d = new Date(f.utcDate);
+  const dayKey = localDayKey(d);
+  const dayLabel =
+    dayKey === localDayKey(new Date())
+      ? "today"
+      : dayKey === localDayKey(new Date(Date.now() + 86_400_000))
+        ? "tomorrow"
+        : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+
   const betBtn = el("button", {
-    class: "btn btn-small",
-    text: "+ bet",
-    onclick: () => {
+    class: "icon-btn",
+    title: "Log a bet for this match",
+    onclick: (e) => {
+      e.stopPropagation();
       state.betPrefill = { league, matchId: f.matchId, matchLabel: `${f.homeTeamName} vs ${f.awayTeamName}` };
       location.hash = "#/bets";
     },
   });
-  return el("div", { class: "card" }, [
-    el("div", { class: "fx-head" }, [
-      el("div", { class: "fx-teams" }, [
-        el("div", { class: "fx-team" }, [crest(f.homeTeamName), el("a", { href: matchHref, class: "fx-name", text: f.homeTeamName })]),
-        el("div", { class: "fx-team" }, [crest(f.awayTeamName), el("a", { href: matchHref, class: "fx-name", text: f.awayTeamName })]),
-      ]),
-      el("div", { class: "fx-kick" }, [
-        live
-          ? liveBadge()
-          : el("time", { text: new Date(f.utcDate).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) }),
-        isFirst ? el("div", { class: "tz-note", text: "your local time" }) : null,
-      ]),
+  betBtn.innerHTML = plusIcon;
+
+  let cells;
+  if (!p) {
+    cells = [el("span", { class: "badge-newcomer", text: "limited data" })];
+  } else {
+    // Star cell: the model's single highest-probability 1X2 outcome.
+    const tips = [
+      ["1", p.homeWin],
+      ["X", p.draw],
+      ["2", p.awayWin],
+    ];
+    tips.sort((a, b) => b[1] - a[1]);
+    cells = [
+      pcell("1", p.homeWin, 0.33),
+      pcell("X", p.draw, 0.33),
+      pcell("2", p.awayWin, 0.33),
+      pcell("O2.5", p.over25),
+      pcell("U2.5", 1 - p.over25),
+      pcell("BTTS", p.bttsYes),
+      pcell(`★${tips[0][0]}`, tips[0][1], 0.33),
+    ];
+  }
+
+  const row = el("div", { class: "match-row" }, [
+    el("div", { class: "mr-kick" }, [
+      live
+        ? liveBadge()
+        : el("span", { class: "time", text: d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) }),
+      el("span", { class: "day", text: live ? "" : dayLabel }),
+      isFirst && !live ? el("div", { class: "tz-note", text: "local time" }) : null,
     ]),
-    p
-      ? segBar(p.homeWin, p.draw, p.awayWin)
-      : el("div", {}, [el("span", { class: "badge-newcomer", text: "Newcomer — limited data" })]),
-    el("div", { class: "meta-row" }, [
-      p ? el("span", { class: "chip static", text: `O2.5 ${pct0(p.over25)}` }) : null,
-      p ? el("span", { class: "chip static", text: `BTTS ${pct0(p.bttsYes)}` }) : null,
-      p && p.mostLikelyScore
-        ? el("span", { class: "chip static", text: `most likely ${p.mostLikelyScore.home}–${p.mostLikelyScore.away} ${pct0(p.mostLikelyScore.prob)}` })
-        : null,
-      el("span", { style: "flex:1" }),
-      betBtn,
+    el("div", { class: "mr-teams" }, [
+      el("div", { class: "mr-team" }, [crest(f.homeTeamName, 24), el("span", { class: "name", text: f.homeTeamName })]),
+      el("div", { class: "mr-team" }, [crest(f.awayTeamName, 24), el("span", { class: "name", text: f.awayTeamName })]),
     ]),
+    el("div", { class: "mr-cells" }, cells),
+    betBtn,
   ]);
+  row.addEventListener("click", () => {
+    location.hash = matchHref;
+  });
+  return row;
 }
 
 /* ---------- #/match/:league/:homeId/:awayId ---------- */
@@ -247,9 +328,11 @@ function fixtureCard(league, f, isFirst) {
 async function renderMatch(root, league, homeId, awayId) {
   root.replaceChildren(loading());
   try {
-    const [pred, model] = await Promise.all([
+    const [pred, model, homeForm, awayForm] = await Promise.all([
       api(`/api/predict?league=${encodeURIComponent(league)}&home=${homeId}&away=${awayId}`),
       api(`/api/model/${encodeURIComponent(league)}`),
+      api(`/api/form?league=${encodeURIComponent(league)}&team=${homeId}`),
+      api(`/api/form?league=${encodeURIComponent(league)}&team=${awayId}`),
     ]);
     const m = pred.markets;
     root.replaceChildren();
@@ -276,29 +359,57 @@ async function renderMatch(root, league, homeId, awayId) {
       ]),
     );
 
+    const formPanel = (team, form, venueSplit) =>
+      el("div", { style: "margin-bottom:10px" }, [
+        el("div", { class: "fx-team", style: "margin-bottom:6px" }, [
+          crest(team.name, 24),
+          el("span", { style: "font-weight:600", text: team.name }),
+          formDots(form.recent),
+        ]),
+        el("p", { class: "note", text: `last ${form.overall.played}: ${form.overall.gf} scored / ${form.overall.ga} conceded · ${venueSplit.label} (last ${venueSplit.played}): ${venueSplit.gf} / ${venueSplit.ga}` }),
+      ]);
+    root.append(
+      el("div", { class: "card" }, [
+        el("h3", { class: "section-title", text: "Form" }),
+        formPanel(pred.home, homeForm, { label: "at home", ...homeForm.home }),
+        formPanel(pred.away, awayForm, { label: "away", ...awayForm.away }),
+      ]),
+    );
+
+    const cg = (label, cell) => el("div", { class: "cg-item" }, [el("span", { class: "cg-label", text: label }), cell]);
     const dc = m.doubleChance;
     const dnb = m.drawNoBet;
     root.append(
       el("div", { class: "card" }, [
-        el("h3", { class: "section-title", text: "Double chance" }),
-        el("div", { class: "meta-row" }, [
-          el("span", { class: "chip static", text: `1X ${pct(dc.homeOrDraw)}` }),
-          el("span", { class: "chip static", text: `X2 ${pct(dc.awayOrDraw)}` }),
-          el("span", { class: "chip static", text: `12 ${pct(dc.homeOrAway)}` }),
+        el("h3", { class: "section-title", text: "Double chance & BTTS" }),
+        el("div", { class: "cell-grid" }, [
+          cg("1X", pcell(pct0(dc.homeOrDraw), dc.homeOrDraw)),
+          cg("X2", pcell(pct0(dc.awayOrDraw), dc.awayOrDraw)),
+          cg("12", pcell(pct0(dc.homeOrAway), dc.homeOrAway)),
+          cg("BTTS yes", pcell(pct0(m.bttsYes), m.bttsYes)),
+          cg("BTTS no", pcell(pct0(m.bttsNo), m.bttsNo)),
         ]),
-        el("p", { class: "note", text: `Draw no bet: ${pred.home.name} ${pct(dnb.home)} (fair ${num(dnb.fairOddsHome)}) · ${pred.away.name} ${pct(dnb.away)} (fair ${num(dnb.fairOddsAway)})` }),
-        el("p", { class: "note", text: `Both teams to score: yes ${pct(m.bttsYes)} / no ${pct(m.bttsNo)}` }),
+        el("p", { class: "note", style: "margin-top:10px", text: `Draw no bet: ${pred.home.name} ${pct(dnb.home)} (fair ${num(dnb.fairOddsHome)}) · ${pred.away.name} ${pct(dnb.away)} (fair ${num(dnb.fairOddsAway)})` }),
       ]),
     );
 
+    const ouGrid = (lines) =>
+      el(
+        "div",
+        { class: "cell-grid" },
+        lines.flatMap((l) => [
+          cg(`O ${l.line}`, pcell(pct0(l.over), l.over)),
+          cg(`U ${l.line}`, pcell(pct0(l.under), l.under)),
+        ]),
+      );
     root.append(
       el("div", { class: "card" }, [
         el("h3", { class: "section-title", text: "Totals" }),
-        ouTable(m.overUnder),
+        ouGrid(m.overUnder),
         el("h4", { class: "section-title", style: "margin-top:14px", text: `${pred.home.name} totals` }),
-        ouTable(m.teamTotals.home),
+        ouGrid(m.teamTotals.home),
         el("h4", { class: "section-title", style: "margin-top:14px", text: `${pred.away.name} totals` }),
-        ouTable(m.teamTotals.away),
+        ouGrid(m.teamTotals.away),
       ]),
     );
 
@@ -317,7 +428,7 @@ async function renderMatch(root, league, homeId, awayId) {
         el("div", { class: "card" }, [
           el("h3", { class: "section-title", text: "Cards (yellow)" }),
           el("p", { class: "note", text: `Expected: ${pred.home.name} ${num(c.expectedHomeYellow)} – ${pred.away.name} ${num(c.expectedAwayYellow)} (total ${num(c.expectedTotalYellow)})` }),
-          ouTable(c.totalOverUnder),
+          ouGrid(c.totalOverUnder),
         ]),
       );
     }
@@ -334,13 +445,6 @@ async function renderMatch(root, league, homeId, awayId) {
   }
 }
 
-function ouTable(lines) {
-  return el("table", { class: "market" }, [
-    el("tr", {}, [el("th", { text: "Line" }), el("th", { text: "Over" }), el("th", { text: "Under" })]),
-    lines.map((l) => el("tr", {}, [el("td", { text: String(l.line) }), el("td", { class: "num", text: pct(l.over) }), el("td", { class: "num", text: pct(l.under) })])),
-  ]);
-}
-
 function ahTable(ah) {
   const central = [1.5, 1, 0.5, 0, -0.5, -1, -1.5];
   const find = (side, line) => side.find((l) => l.line === line);
@@ -351,9 +455,9 @@ function ahTable(ah) {
       const a = find(ah.away, -line);
       return el("tr", {}, [
         el("td", { text: `${line > 0 ? "+" : ""}${line} / ${-line > 0 ? "+" : ""}${-line}` }),
-        el("td", { class: "num", text: h ? pct(h.pWin) : "–" }),
+        el("td", {}, h ? [pcell(pct0(h.pWin), h.pWin)] : ["–"]),
         el("td", { class: "num", text: h && h.fairOdds ? num(h.fairOdds) : "–" }),
-        el("td", { class: "num", text: a ? pct(a.pWin) : "–" }),
+        el("td", {}, a ? [pcell(pct0(a.pWin), a.pWin)] : ["–"]),
         el("td", { class: "num", text: a && a.fairOdds ? num(a.fairOdds) : "–" }),
       ]);
     }),
@@ -366,9 +470,9 @@ function ehTable(lines) {
     lines.map((l) =>
       el("tr", {}, [
         el("td", { text: `${l.line > 0 ? "+" : ""}${l.line}` }),
-        el("td", { class: "num", text: pct(l.pHome) }),
-        el("td", { class: "num", text: pct(l.pDraw) }),
-        el("td", { class: "num", text: pct(l.pAway) }),
+        el("td", {}, [pcell(pct0(l.pHome), l.pHome, 0.33)]),
+        el("td", {}, [pcell(pct0(l.pDraw), l.pDraw, 0.33)]),
+        el("td", {}, [pcell(pct0(l.pAway), l.pAway, 0.33)]),
       ]),
     ),
   ]);
@@ -388,20 +492,33 @@ async function renderRatings(root, params) {
       return;
     }
     const data = await api(`/api/model/${encodeURIComponent(selected)}`);
+    // Form dots per visible team, fetched in parallel and cached per session.
+    const forms = new Map();
+    await Promise.all(
+      data.ratings.map(async (r) => {
+        try {
+          forms.set(r.teamId, await getForm(selected, r.teamId));
+        } catch {
+          forms.set(r.teamId, null);
+        }
+      }),
+    );
     root.append(
       el("div", { class: "card" }, [
         el("h3", { class: "section-title", text: `${selected} ratings` }),
         el("p", { class: "note", text: `Home advantage ${num(data.homeAdv, 3)}, rho ${num(data.rho, 3)}. Fitted on ${data.model.matchCount} matches.` }),
         el("table", { class: "market" }, [
-          el("tr", {}, [el("th", { text: "Team" }), el("th", { text: "Attack" }), el("th", { text: "Defence" }), el("th", { text: "Rating" })]),
-          data.ratings.map((r) =>
-            el("tr", {}, [
+          el("tr", {}, [el("th", { text: "Team" }), el("th", { text: "Form" }), el("th", { text: "Attack" }), el("th", { text: "Defence" }), el("th", { text: "Rating" })]),
+          data.ratings.map((r) => {
+            const form = forms.get(r.teamId);
+            return el("tr", {}, [
               el("td", {}, [el("div", { class: "fx-team" }, [crest(r.name, 26), el("span", { text: r.name })])]),
+              el("td", {}, form && form.recent.length > 0 ? [formDots(form.recent)] : ["–"]),
               el("td", { class: "num", text: num(r.attack, 3) }),
               el("td", { class: "num", text: num(r.defence, 3) }),
               el("td", { class: "num", text: num(r.rating, 3) }),
-            ]),
-          ),
+            ]);
+          }),
         ]),
       ]),
     );
@@ -562,41 +679,31 @@ async function loadValueList(list, league, quotaBadge) {
       ...data.opportunities.map((r) => {
         const kickoff = new Date(r.utcDate).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
         const marketLabel = r.market === "h2h" ? "1X2" : `O/U ${r.line}`;
-        return el("div", { class: "card" }, [
-          el("div", { class: "row-between" }, [
-            el("div", {}, [
-              el("div", { style: "font-weight:600", text: `${r.homeTeam} vs ${r.awayTeam}` }),
-              el("div", { class: "small muted", text: kickoff }),
-            ]),
-            el("span", { class: "ev-pill", text: `+${(r.evPct * 100).toFixed(1)}% EV` }),
+        return el("div", { class: "match-row", style: "cursor:default" }, [
+          el("div", { class: "mr-teams" }, [
+            el("div", { style: "font-weight:600", text: `${r.homeTeam} vs ${r.awayTeam}` }),
+            el("div", { class: "small muted", text: `${kickoff} · ${marketLabel} · ${r.selection}` }),
+            el("div", { class: "small muted num", text: `best ${num(r.bestOdds)} · fair ${num(r.fairOdds)} · consensus ${num(r.consensusOdds)} · ${r.bookmakers} books` }),
           ]),
-          el("div", { class: "stat3" }, [
-            el("div", { class: "cell" }, [el("div", { class: "value", text: pct(r.modelProb) }), el("div", { class: "label", text: "model" })]),
-            el("div", { class: "cell" }, [el("div", { class: "value", text: num(r.bestOdds) }), el("div", { class: "label", text: "best odds" })]),
-            el("div", { class: "cell" }, [el("div", { class: "value", text: num(r.consensusOdds) }), el("div", { class: "label", text: "consensus" })]),
-          ]),
-          el("div", { class: "meta-row" }, [
-            el("span", { class: "chip static", text: `${marketLabel} · ${r.selection}` }),
-            el("span", { class: "chip static", text: `fair ${num(r.fairOdds)}` }),
-            el("span", { class: "chip static", text: `${r.bookmakers} books` }),
-            el("span", { style: "flex:1" }),
-            el("button", {
-              class: "btn btn-small",
-              text: "log bet",
-              onclick: () => {
-                state.betPrefill = {
-                  league,
-                  matchId: r.matchId,
-                  matchLabel: `${r.homeTeam} vs ${r.awayTeam}`,
-                  market: r.market === "h2h" ? "1X2" : "overUnder",
-                  selection: r.selection,
-                  line: r.line,
-                  odds: r.bestOdds,
-                };
-                location.hash = "#/bets";
-              },
-            }),
-          ]),
+          pcell(pct0(r.modelProb), r.modelProb, r.market === "h2h" ? 0.33 : 0.5),
+          el("span", { class: "ev-pill", text: `+${(r.evPct * 100).toFixed(1)}% EV` }),
+          (() => {
+            const btn = el("button", { class: "icon-btn", title: "Log this bet" });
+            btn.innerHTML = plusIcon;
+            btn.addEventListener("click", () => {
+              state.betPrefill = {
+                league,
+                matchId: r.matchId,
+                matchLabel: `${r.homeTeam} vs ${r.awayTeam}`,
+                market: r.market === "h2h" ? "1X2" : "overUnder",
+                selection: r.selection,
+                line: r.line,
+                odds: r.bestOdds,
+              };
+              location.hash = "#/bets";
+            });
+            return btn;
+          })(),
         ]);
       }),
     );

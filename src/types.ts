@@ -147,3 +147,14 @@ export interface OddsSnapshotRow {
   home_name: string;
   away_name: string;
 }
+
+/** Finished match row with team names, as consumed by the form endpoint. */
+export interface FormMatchRow {
+  utc_date: string;
+  home_team_id: number;
+  away_team_id: number;
+  home_goals: number;
+  away_goals: number;
+  home_name: string;
+  away_name: string;
+}

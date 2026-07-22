@@ -4,7 +4,7 @@
  * an argument — no global state.
  */
 
-import type { CardMatch, IngestedMatch, MatchRow, ModelMatch, OddsSnapshotRow, TeamRow } from "../types";
+import type { CardMatch, FormMatchRow, IngestedMatch, MatchRow, ModelMatch, OddsSnapshotRow, TeamRow } from "../types";
 
 const BATCH_CHUNK = 50;
 
@@ -400,4 +400,32 @@ export async function countOddsSnapshots(db: D1Database, league: string): Promis
     .bind(league)
     .first<{ c: number }>();
   return row?.c ?? 0;
+}
+
+/**
+ * A team's recent finished matches in a league, newest first (both venues).
+ * 30 rows comfortably cover last-5 overall + last-5 home + last-5 away.
+ */
+export async function getRecentTeamMatches(
+  db: D1Database,
+  league: string,
+  teamId: number,
+  limit = 30,
+): Promise<FormMatchRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT m.utc_date, m.home_team_id, m.away_team_id, m.home_goals, m.away_goals,
+              ht.name AS home_name, at.name AS away_name
+       FROM matches m
+       JOIN teams ht ON ht.id = m.home_team_id
+       JOIN teams at ON at.id = m.away_team_id
+       WHERE m.league = ? AND m.status = 'FINISHED'
+         AND m.home_goals IS NOT NULL AND m.away_goals IS NOT NULL
+         AND (m.home_team_id = ? OR m.away_team_id = ?)
+       ORDER BY m.utc_date DESC
+       LIMIT ?`,
+    )
+    .bind(league, teamId, teamId, limit)
+    .all<FormMatchRow>();
+  return results;
 }

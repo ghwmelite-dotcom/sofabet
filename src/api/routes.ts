@@ -12,6 +12,7 @@ import {
   getMatchCountsByLeague,
   getMeta,
   getOddsSnapshotsForLeague,
+  getRecentTeamMatches,
   getScheduledMatches,
   getStatsCoverage,
   getTeams,
@@ -21,9 +22,10 @@ import { syncOddsLeague } from "../data/syncOdds";
 import { syncStatsBatch } from "../data/syncStats";
 import { InsufficientDataError } from "../model/backtest";
 import { predictScoreGrid } from "../model/dixonColes";
+import { computeTeamForm } from "../model/form";
 import { gridToMarkets } from "../model/markets";
 import { isValueRow, latestPerCombo } from "../model/odds";
-import { backtestLeague, getOrFitCards, getOrFitParams, predictMatch } from "../model/service";
+import { backtestLeague, getOrFitCards, getOrFitParams, predictMatch, resolveTeam } from "../model/service";
 import { FootballDataError, HttpError, OddsRestrictedError, StatsRestrictedError } from "../types";
 import { handleBets } from "./bets";
 import { json, requireSyncKey } from "./util";
@@ -331,6 +333,19 @@ async function handleBacktest(url: URL, env: Env): Promise<Response> {
   return json(result);
 }
 
+/** GET /api/form?league=X&team=<id|name> — last-5 form + venue splits. */
+async function handleForm(url: URL, env: Env): Promise<Response> {
+  const league = requireLeagueParam(url);
+  await requireKnownLeague(env, league);
+  const teamQuery = url.searchParams.get("team");
+  if (!teamQuery) throw new HttpError(400, "missing required query parameter 'team' (id or name)");
+  const teams = await getTeams(env.DB, league);
+  const team = resolveTeam(teams, teamQuery);
+  const rows = await getRecentTeamMatches(env.DB, league, team.id);
+  const form = computeTeamForm(rows, team.id);
+  return json({ league, team, ...form });
+}
+
 export async function handleRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -346,6 +361,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
     if (path === "/api/fixtures" && method === "GET") return await handleFixtures(url, env);
     if (path === "/api/predict" && method === "GET") return await handlePredict(url, env);
     if (path === "/api/backtest" && method === "GET") return await handleBacktest(url, env);
+    if (path === "/api/form" && method === "GET") return await handleForm(url, env);
     if (path === "/api/bets" || path.startsWith("/api/bets/")) return await handleBets(request, env, url);
     const modelMatch = /^\/api\/model\/([A-Za-z0-9]+)$/.exec(path);
     if (modelMatch && method === "GET") return await handleModel(modelMatch[1].toUpperCase(), url, env);

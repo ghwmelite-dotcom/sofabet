@@ -85,6 +85,7 @@ All responses are JSON. Errors are `{"error": "..."}` with a sensible status.
 | `GET /api/predict?league=PL&home=<name\|id>&away=<name\|id>` | Full markets: 1X2, BTTS, over/under 0.5–4.5, top 5 correct scores, double chance, draw-no-bet (with fair odds), team totals 0.5–3.5, asian handicap ladder −2..+2 step 0.25 (quarter lines = half-stake averages; fairOdds = (1−pPush)/pWin), european handicap −2..+2; expected goals; model freshness. Plus a `cards` block (expected yellows, total O/U 1.5–6.5, per-team O/U 1.5/2.5) once the league has ≥ 60 matches with bookings — otherwise `cards: null` with a `cardsCoverage` note |
 | `GET /api/model/:league[?kind=goals\|cards]` | Fitted ratings table (attack/defence per team, home advantage, rho, fitted_at, match_count). `kind=cards` returns the yellow-card ratings fitted on `match_stats` |
 | `GET /api/backtest?league=PL` | Walk-forward backtest: log loss / Brier / RPS for model vs base-rate baseline vs uniform, decile calibration table |
+| `GET /api/form?league=PL&team=<id\|name>` | Team form: last 5 finished matches (opponent, venue, score, W/D/L) newest first, plus gf/ga totals overall and over the last 5 home / last 5 away games |
 
 ## PWA + bet tracker
 
