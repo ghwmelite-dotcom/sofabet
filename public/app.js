@@ -721,10 +721,6 @@ function calibrationChart(rows) {
 /* ---------- #/value ---------- */
 
 async function renderValue(root, params) {
-  if (!state.key) {
-    renderKeyPrompt(root, null, () => renderValue(root, params));
-    return;
-  }
   root.replaceChildren(loading());
   try {
     const leagues = await loadLeagues();
@@ -737,6 +733,14 @@ async function renderValue(root, params) {
       class: "btn btn-small",
       text: "Refresh odds",
       onclick: async () => {
+        if (!state.key) {
+          renderKeyPrompt(
+            root,
+            "Viewing is open — but refreshing spends your the-odds-api quota, so it needs the admin key.",
+            () => renderValue(root, params),
+          );
+          return;
+        }
         refreshBtn.disabled = true;
         syncMsg.textContent = "Syncing odds (h2h + totals)…";
         try {
