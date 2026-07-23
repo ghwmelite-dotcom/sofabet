@@ -1,5 +1,5 @@
 /* Sofabet service worker: app shell cache-first, /api GETs network-first. */
-const CACHE = "sofabet-shell-v6";
+const CACHE = "sofabet-shell-v7";
 const SHELL = [
   "/",
   "/index.html",

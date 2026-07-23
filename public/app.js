@@ -108,11 +108,19 @@ function pcell(label, p, neutral = 0.5, icon = null) {
   const darkText = hue >= 35 && hue <= 60; // amber needs dark text for contrast
   const cell = el("span", {
     class: `pcell${darkText ? " dark-text" : ""}`,
-    style: `background:hsl(${Math.round(hue)} 72% 42% / ${alpha})`,
+    style: `background:hsl(${Math.round(hue)} 78% ${darkText ? 50 : 45}% / ${alpha})`,
     title: `${label} ${pct(p)}`,
   });
-  if (icon) cell.innerHTML = icon;
-  cell.append(document.createTextNode(label));
+  if (icon) {
+    const i = el("span", { class: "pcell-icon" });
+    i.innerHTML = icon;
+    cell.append(i);
+  }
+  // Labels that already carry the % render as one bold line; short market
+  // labels get the probability as a second, larger line so rows show numbers.
+  const showValue = !/%/.test(label);
+  cell.append(el("span", { class: showValue ? "pcell-label" : "pcell-solo", text: label }));
+  if (showValue) cell.append(el("span", { class: "pcell-value", text: pct0(p) }));
   return cell;
 }
 
