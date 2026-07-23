@@ -452,7 +452,7 @@ function rolloverCard(rollover) {
     ]);
   });
 
-  return el("div", { class: "card" }, [
+  return el("div", { class: "card rollover-hero" }, [
     el("div", { class: "row-between" }, [
       el("h3", { class: "section-title", text: "Weekly rollover" }),
       el("label", { class: "small muted", style: "display:flex;align-items:center;gap:6px" }, ["stake", stakeInput]),
