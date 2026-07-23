@@ -7,8 +7,9 @@
 ---
 
 **Project:** Sofabet
-**Generated:** 2026-07-23 13:55:35
-**Category:** Sports Team/Club
+**Generated:** 2026-07-23 22:09:20
+**Category:** Study Together / Virtual Coworking
+**Design Dials:** Variance 8/10 (Bold / Asymmetric) | Motion 7/10 (Standard) | Density 6/10 (Standard)
 
 ---
 
@@ -18,32 +19,28 @@
 
 | Role | Hex | CSS Variable |
 |------|-----|--------------|
-| Primary | `#1E40AF` | `--color-primary` |
+| Primary | `#0891B2` | `--color-primary` |
 | On Primary | `#FFFFFF` | `--color-on-primary` |
-| Secondary | `#3B82F6` | `--color-secondary` |
-| Accent/CTA | `#D97706` | `--color-accent` |
-| Background | `#F8FAFC` | `--color-background` |
-| Foreground | `#1E3A8A` | `--color-foreground` |
-| Muted | `#E9EEF6` | `--color-muted` |
-| Border | `#DBEAFE` | `--color-border` |
+| Secondary | `#22D3EE` | `--color-secondary` |
+| Accent/CTA | `#059669` | `--color-accent` |
+| Background | `#ECFEFF` | `--color-background` |
+| Foreground | `#164E63` | `--color-foreground` |
+| Muted | `#E8F1F6` | `--color-muted` |
+| Border | `#A5F3FC` | `--color-border` |
 | Destructive | `#DC2626` | `--color-destructive` |
-| Ring | `#1E40AF` | `--color-ring` |
+| Ring | `#0891B2` | `--color-ring` |
 
-**Color Notes:** Blue data + amber highlights [Accent adjusted from #F59E0B for WCAG 3:1]
+**Color Notes:** Calm cyan + health green
 
 ### Typography
 
-- **Heading Font:** Fira Code
-- **Body Font:** Fira Sans
-- **Mood:** dashboard, data, analytics, code, technical, precise
-- **Google Fonts:** [Fira Code + Fira Sans](https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap)
-
-**CSS Import:**
-```css
-@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
-```
+- **Heading Font:** Inter
+- **Body Font:** Inter
+- **Mood:** Professional + Clean hierarchy
 
 ### Spacing Variables
+
+*Density: 6/10 — Standard*
 
 | Token | Value | Usage |
 |-------|-------|-------|
@@ -73,7 +70,7 @@
 ```css
 /* Primary Button */
 .btn-primary {
-  background: #D97706;
+  background: #059669;
   color: white;
   padding: 12px 24px;
   border-radius: 8px;
@@ -90,8 +87,8 @@
 /* Secondary Button */
 .btn-secondary {
   background: transparent;
-  color: #1E40AF;
-  border: 2px solid #1E40AF;
+  color: #0891B2;
+  border: 2px solid #0891B2;
   padding: 12px 24px;
   border-radius: 8px;
   font-weight: 600;
@@ -104,7 +101,7 @@
 
 ```css
 .card {
-  background: #F8FAFC;
+  background: #ECFEFF;
   border-radius: 12px;
   padding: 24px;
   box-shadow: var(--shadow-md);
@@ -130,9 +127,9 @@
 }
 
 .input:focus {
-  border-color: #1E40AF;
+  border-color: #0891B2;
   outline: none;
-  box-shadow: 0 0 0 3px #1E40AF20;
+  box-shadow: 0 0 0 3px #0891B220;
 }
 ```
 
@@ -158,13 +155,13 @@
 
 ## Style Guidelines
 
-**Style:** Vibrant & Block-based
+**Style:** Kinetic Brutalism (Mobile)
 
-**Keywords:** Bold, energetic, playful, block layout, geometric shapes, high color contrast, duotone, modern, energetic
+**Keywords:** kinetic, brutalism, motion, marquee, acid yellow, uppercase, oversized, aggressive typography, street, zine, high contrast, scroll-driven, haptic, reanimated
 
-**Best For:** Startups, creative agencies, gaming, social media, youth-focused, entertainment, consumer
+**Best For:** Immersive storytelling apps, brand flagship mobile, music/culture platforms, sports apps, underground zines, limited-edition product drops, performance dashboards
 
-**Key Effects:** Large sections (48px+ gaps), animated patterns, bold hover (color shift), scroll-snap, large type (32px+), 200-300ms
+**Key Effects:** Infinite marquee (Reanimated, Linear easing, 5s loop, hard clip), hero parallax (scale 1.0→1.3 + fade), sticky section header push, card flood inversion on press (bg→#DFE104, text→#000000), haptic Medium on every press, scroll-triggered interpolate transforms, 0px radius, 2px borders, 100ms color transitions
 
 ### Page Pattern
 
@@ -176,10 +173,25 @@
 
 ---
 
+## Motion
+
+**Page Transition** (Standard) — Trigger: route change | Duration: 400-600ms | Easing: `power2.inOut`
+
+```js
+const tl = gsap.timeline(); tl.to('.transition-overlay', { yPercent: 0, duration: 0.4, ease: 'power2.inOut' }).call(navigate).to('.transition-overlay', { yPercent: -100, duration: 0.4, ease: 'power2.inOut', delay: 0.1 });
+```
+
+**Framework notes:** Keep the overlay element mounted at the layout root (outside the page component) so it survives the route swap
+
+- ✅ Show a lightweight loading indicator if the destination route's data fetch outlasts the overlay
+- ❌ Don't tie the overlay's reveal directly to data-fetch completion without a max-wait timeout; a slow API stalls the whole transition
+- ⚡ Prefer CSS transform (yPercent) over top/left to keep the overlay animation on the compositor thread
+
+---
+
 ## Anti-Patterns (Do NOT Use)
 
-- ❌ Static content
-- ❌ Poor fan engagement
+- ❌ Excessive decoration
 
 ### Additional Forbidden Patterns
 

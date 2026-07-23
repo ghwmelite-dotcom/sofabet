@@ -243,7 +243,14 @@ async function renderFixtures(root, params) {
       params.get("league") && pool.some((l) => l.key === params.get("league"))
         ? params.get("league")
         : (pool.find((l) => inNextWeek(l.key)) ?? pool[0]).key;
+    let ticker = null;
+    try {
+      ticker = buildTicker(await getAcca());
+    } catch (e) {
+      console.error("ticker failed", e);
+    }
     root.replaceChildren(
+      ...(ticker ? [ticker] : []),
       leagueChips(selected, (key) => renderFixtures(root, new URLSearchParams(`league=${key}`)), pool),
     );
     const accaWrap = await buildAccaSection();
@@ -287,6 +294,49 @@ const plusIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 
 function marketLabel(market, line) {
   return market === "h2h" ? "1X2" : `O/U ${line}`;
+}
+
+/** Value ticker: today's flagged picks as an auto-scrolling marquee strip. */
+function buildTicker(accaData) {
+  const legs = [];
+  const seen = new Set();
+  const sources = [...(accaData.acca?.legs ?? []), ...(accaData.rollover?.days ?? []).map((d) => d.leg).filter(Boolean)];
+  for (const l of sources) {
+    if (seen.has(l.matchId)) continue;
+    seen.add(l.matchId);
+    legs.push(l);
+  }
+  if (legs.length < 2) return null;
+  const item = (l) => {
+    const team =
+      l.market === "h2h"
+        ? l.selection === "home"
+          ? l.homeTeam
+          : l.selection === "away"
+            ? l.awayTeam
+            : `${l.homeTeam} v ${l.awayTeam}`
+        : `${l.homeTeam} v ${l.awayTeam}`;
+    const selection = l.market === "h2h" ? l.selection : `${l.selection} ${l.line}`;
+    return el("span", { class: "tk-item" }, [
+      el("span", { class: "tk-team", text: team.toUpperCase() }),
+      el("span", { text: ` ${selection} ` }),
+      el("span", { class: "num", text: `${pct0(l.modelProb)} ` }),
+      el("span", { class: "num", text: `@${num(l.bestOdds)} ` }),
+      el("span", { class: "tk-ev", text: `${l.evPct >= 0 ? "+" : ""}${(l.evPct * 100).toFixed(0)}% EV` }),
+    ]);
+  };
+  const group = () => {
+    const g = el("span", { style: "display:inline-flex;gap:36px" });
+    legs.forEach((l, i) => {
+      if (i > 0) g.append(el("span", { class: "tk-sep", text: "•" }));
+      g.append(item(l));
+    });
+    return g;
+  };
+  // Content duplicated so the -50% translateX loop wraps seamlessly.
+  return el("div", { class: "ticker", role: "marquee", "aria-label": "Today's value picks" }, [
+    el("div", { class: "ticker-track" }, [group(), group()]),
+  ]);
 }
 
 /** Log one acca/rollover leg as an individual tracked bet. */
@@ -340,17 +390,20 @@ function accaCard(acca) {
       logBtn.disabled = false;
     }
   });
-  return el("div", { class: "card", style: "box-shadow:0 0 12px rgba(59,130,246,0.12), inset 0 1px 0 rgba(255,255,255,0.02)" }, [
+  return el("div", { class: "card acca-hero" }, [
     el("div", { class: "row-between" }, [
       el("h3", { class: "section-title", text: "Today's ACCA" }),
       el("span", { class: "chip static", text: `${acca.legs.length} legs` }),
     ]),
     ...acca.legs.map(legRow),
-    el("div", { class: "meta-row", style: "margin-top:10px;padding-top:10px;border-top:1px solid var(--line)" }, [
-      el("span", { class: "num", style: "color:var(--amber);font-size:17px", text: `Combined ${num(acca.combinedOdds)}` }),
-      el("span", { class: "num", text: `Model chance ${pct0(acca.combinedProb)}` }),
-      el("span", { class: "ev-pill", text: `${acca.evPct >= 0 ? "+" : ""}${(acca.evPct * 100).toFixed(1)}% EV` }),
+    el("div", { class: "acca-strip" }, [
+      el("div", {}, [
+        el("div", { class: "strip-label", text: "Combined odds" }),
+        el("div", { class: "strip-odds", text: num(acca.combinedOdds) }),
+      ]),
+      el("span", { class: "strip-chance", text: `Model chance ${pct0(acca.combinedProb)}` }),
       el("span", { style: "flex:1" }),
+      el("span", { class: "ev-pill", text: `${acca.evPct >= 0 ? "+" : ""}${(acca.evPct * 100).toFixed(1)}% EV` }),
       logBtn,
     ]),
     el("div", { class: "meta-row" }, [el("span", { class: "note", style: "font-size:11px", text: "Accas multiply variance — combined chance drops with every leg." }), msg]),
@@ -399,7 +452,7 @@ function rolloverCard(rollover) {
     ]);
   });
 
-  return el("div", { class: "card", style: "box-shadow:0 0 12px rgba(59,130,246,0.12), inset 0 1px 0 rgba(255,255,255,0.02)" }, [
+  return el("div", { class: "card" }, [
     el("div", { class: "row-between" }, [
       el("h3", { class: "section-title", text: "Weekly rollover" }),
       el("label", { class: "small muted", style: "display:flex;align-items:center;gap:6px" }, ["stake", stakeInput]),
@@ -470,6 +523,8 @@ function matchRow(league, f, isFirst) {
       pcell("BTTS", p.bttsYes),
       pcell(tips[0][0], tips[0][1], 0.33, ICONS.star),
     ];
+    // The ★ top-tip cell is the acid signature, not part of the prob ramp.
+    cells[cells.length - 1].classList.add("tip-star");
   }
 
   const row = el("div", { class: "match-row" }, [

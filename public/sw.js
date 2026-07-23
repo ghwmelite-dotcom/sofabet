@@ -1,5 +1,5 @@
 /* Sofabet service worker: app shell cache-first, /api GETs network-first. */
-const CACHE = "sofabet-shell-v8";
+const CACHE = "sofabet-shell-v9";
 const SHELL = [
   "/",
   "/index.html",
@@ -17,6 +17,8 @@ const SHELL = [
   "/fonts/fira-code-500.woff2",
   "/fonts/fira-code-600.woff2",
   "/fonts/fira-code-700.woff2",
+  "/fonts/space-grotesk-500.woff2",
+  "/fonts/space-grotesk-700.woff2",
 ];
 
 self.addEventListener("install", (event) => {
