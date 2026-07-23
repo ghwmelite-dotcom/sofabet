@@ -21,6 +21,7 @@ import {
 } from "../data/repo";
 import { syncAllLeagues, syncLeague } from "../data/sync";
 import { syncOddsLeague } from "../data/syncOdds";
+import { OddsApiClient } from "../data/oddsApi";
 import { syncStatsBatch } from "../data/syncStats";
 import { InsufficientDataError } from "../model/backtest";
 import { predictScoreGrid } from "../model/dixonColes";
@@ -203,6 +204,16 @@ async function handleSyncOdds(url: URL, env: Env, request: Request): Promise<Res
   const markets = parseOddsMarkets(url);
   const result = await syncOddsLeague(env.DB, env, league, markets);
   return json({ ok: true, ...result });
+}
+
+/** GET /api/odds-sports (SYNC_KEY) — the-odds-api's soccer catalog, for debugging sport keys. */
+async function handleOddsSports(env: Env, request: Request): Promise<Response> {
+  requireSyncKey(env, request);
+  if (!env.ODDS_API_KEY) throw new HttpError(500, "ODDS_API_KEY secret is not configured");
+  const client = new OddsApiClient(env.ODDS_API_KEY);
+  const sports = await client.listSports();
+  const soccer = sports.filter((s) => s.key.startsWith("soccer")).map((s) => ({ key: s.key, title: s.title }));
+  return json({ count: soccer.length, sports: soccer });
 }
 
 /** GET /api/value?league=PL[&minEv=0.04] — +EV opportunities from the latest snapshots. */
@@ -425,6 +436,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
     if (path === "/api/sync" && method === "POST") return await handleSync(url, env, request);
     if (path === "/api/sync-stats" && method === "POST") return await handleSyncStats(url, env, request);
     if (path === "/api/sync-odds" && method === "POST") return await handleSyncOdds(url, env, request);
+    if (path === "/api/odds-sports" && method === "GET") return await handleOddsSports(env, request);
     if (path === "/api/stats-coverage" && method === "GET") return await handleStatsCoverage(env);
     if (path === "/api/value" && method === "GET") return await handleValue(url, env);
     if (path === "/api/fixtures" && method === "GET") return await handleFixtures(url, env);
