@@ -18,12 +18,15 @@ import {
   getScheduledMatches,
   getStatsCoverage,
   getTeams,
+  getUpcomingOddsSnapshots,
 } from "../data/repo";
 import { syncAllLeagues, syncLeague } from "../data/sync";
 import { syncOddsLeague } from "../data/syncOdds";
 import { OddsApiClient } from "../data/oddsApi";
 import { syncStatsBatch } from "../data/syncStats";
 import { InsufficientDataError } from "../model/backtest";
+import { buildTodayAcca, buildWeeklyRollover } from "../model/acca";
+import type { AccaCandidate } from "../model/acca";
 import { predictScoreGrid } from "../model/dixonColes";
 import { computeTeamForm } from "../model/form";
 import { gradePrediction, summarizeGrades } from "../model/grade";
@@ -426,6 +429,22 @@ async function handleSnapshot(url: URL, env: Env, request: Request): Promise<Res
   return json({ ok: true, league, ...result });
 }
 
+/**
+ * GET /api/acca — Today's ACCA + Weekly Rollover from the latest value
+ * snapshots across all registry leagues (read-only, no upstream calls).
+ */
+async function handleAcca(env: Env): Promise<Response> {
+  const nowIso = new Date().toISOString();
+  const untilIso = new Date(Date.now() + 7 * 86_400_000).toISOString();
+  const rows = await getUpcomingOddsSnapshots(env.DB, Object.keys(LEAGUES), nowIso, untilIso);
+  const candidates: AccaCandidate[] = latestPerCombo(rows).filter((r) => isValueRow(r));
+  return json({
+    generatedAt: nowIso,
+    acca: buildTodayAcca(candidates, nowIso),
+    rollover: buildWeeklyRollover(candidates, nowIso),
+  });
+}
+
 export async function handleRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -444,6 +463,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
     if (path === "/api/backtest" && method === "GET") return await handleBacktest(url, env);
     if (path === "/api/form" && method === "GET") return await handleForm(url, env);
     if (path === "/api/results" && method === "GET") return await handleResults(url, env);
+    if (path === "/api/acca" && method === "GET") return await handleAcca(env);
     if (path === "/api/predictions/snapshot" && method === "POST") return await handleSnapshot(url, env, request);
     if (path === "/api/bets" || path.startsWith("/api/bets/")) return await handleBets(request, env, url);
     const modelMatch = /^\/api\/model\/([A-Za-z0-9]+)$/.exec(path);

@@ -121,6 +121,7 @@ All responses are JSON. Errors are `{"error": "..."}` with a sensible status.
 | `GET /api/form?league=PL&team=<id\|name>` | Team form: last 5 finished matches (opponent, venue, score, W/D/L) newest first, plus gf/ga totals overall and over the last 5 home / last 5 away games |
 | `GET /api/results?league=PL[&days=14]` | Graded track record: FINISHED matches INNER JOIN their pre-kickoff prediction snapshots (1X2 predicted side + hit, O2.5/BTTS/top-score hits, logLoss, Brier), newest first, plus aggregate summary. `days` 1–60. 200 with a `note` when no snapshots exist yet |
 | `POST /api/predictions/snapshot?league=PL` | SYNC_KEY-protected. Force a pre-kickoff snapshot write for the league outside the daily cron (e.g. right after a manual fixture sync) |
+| `GET /api/acca` | Today's ACCA (top-EV legs from matches starting within 24h, max 4, one per match; null under 2 legs) + Weekly Rollover (one highest-probability pick per UTC day for 7 days, floor 0.45; cumulative path skipping empty days). Read-only, built from existing value snapshots across all registry leagues |
 
 ## PWA + bet tracker
 

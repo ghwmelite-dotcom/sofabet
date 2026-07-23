@@ -402,6 +402,40 @@ export async function countOddsSnapshots(db: D1Database, league: string): Promis
   return row?.c ?? 0;
 }
 
+export interface UpcomingSnapshotRow extends OddsSnapshotRow {
+  match_league: string;
+}
+
+/**
+ * Odds snapshots for SCHEDULED/TIMED matches across the given leagues with
+ * kickoff in (nowIso, untilIso]. The acca endpoint dedupes to the latest per
+ * (match, market, selection, line) itself.
+ */
+export async function getUpcomingOddsSnapshots(
+  db: D1Database,
+  leagues: string[],
+  nowIso: string,
+  untilIso: string,
+): Promise<UpcomingSnapshotRow[]> {
+  if (leagues.length === 0) return [];
+  const placeholders = leagues.map(() => "?").join(", ");
+  const { results } = await db
+    .prepare(
+      `SELECT s.*, m.league AS match_league, m.utc_date, ht.name AS home_name, at.name AS away_name
+       FROM odds_snapshots s
+       JOIN matches m ON m.id = s.match_id
+       JOIN teams ht ON ht.id = m.home_team_id
+       JOIN teams at ON at.id = m.away_team_id
+       WHERE m.league IN (${placeholders})
+         AND m.status IN ('SCHEDULED', 'TIMED')
+         AND m.utc_date > ? AND m.utc_date <= ?
+       ORDER BY m.utc_date ASC`,
+    )
+    .bind(...leagues, nowIso, untilIso)
+    .all<UpcomingSnapshotRow>();
+  return results;
+}
+
 /**
  * A team's recent finished matches in a league, newest first (both venues).
  * 30 rows comfortably cover last-5 overall + last-5 home + last-5 away.

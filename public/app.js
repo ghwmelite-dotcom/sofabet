@@ -5,6 +5,7 @@ const state = {
   leagues: null, // cached /api/leagues payload
   fixturesByLeague: {}, // session cache of /api/fixtures per league
   formByTeam: {}, // session cache of /api/form per "league:teamId"
+  acca: null, // session cache of /api/acca
   key: localStorage.getItem("sofabet_key") || "",
   betPrefill: null, // prefill handed to the bet form by "+ bet" buttons
 };
@@ -83,6 +84,13 @@ async function getForm(league, teamId) {
     state.formByTeam[key] = await api(`/api/form?league=${encodeURIComponent(league)}&team=${teamId}`);
   }
   return state.formByTeam[key];
+}
+
+async function getAcca() {
+  if (!state.acca) {
+    state.acca = await api("/api/acca");
+  }
+  return state.acca;
 }
 
 /* ---------- probability cells ---------- */
@@ -238,6 +246,8 @@ async function renderFixtures(root, params) {
     root.replaceChildren(
       leagueChips(selected, (key) => renderFixtures(root, new URLSearchParams(`league=${key}`)), pool),
     );
+    const accaWrap = await buildAccaSection();
+    if (accaWrap) root.append(accaWrap);
     const data = await getFixtures(selected);
     const fixtures = data.fixtures;
     if (fixtures.length === 0) {
@@ -272,6 +282,149 @@ async function renderFixtures(root, params) {
 }
 
 const plusIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+
+/* ---------- ACCA / rollover cards (fixtures home) ---------- */
+
+function marketLabel(market, line) {
+  return market === "h2h" ? "1X2" : `O/U ${line}`;
+}
+
+/** Log one acca/rollover leg as an individual tracked bet. */
+async function logLegBet(leg, stake, msgEl) {
+  if (!state.key) {
+    state.betPrefill = null;
+    location.hash = "#/bets"; // key prompt lives on the bets screen
+    return;
+  }
+  await api("/api/bets", {
+    auth: true,
+    method: "POST",
+    body: {
+      league: leg.league,
+      matchId: leg.matchId,
+      matchLabel: `${leg.homeTeam} vs ${leg.awayTeam}`,
+      bookmaker: "other",
+      market: leg.market === "h2h" ? "1X2" : "overUnder",
+      selection: leg.selection,
+      line: leg.line ?? undefined,
+      odds: leg.bestOdds,
+      stake,
+    },
+  });
+  msgEl.textContent = "logged ✓";
+}
+
+function legRow(leg) {
+  return el("div", { class: "mr-team", style: "gap:8px;margin:6px 0" }, [
+    crest(leg.homeTeam, 20),
+    crest(leg.awayTeam, 20),
+    el("span", { class: "name", text: `${leg.homeTeam} v ${leg.awayTeam}` }),
+    el("span", { class: "small muted", text: `${marketLabel(leg.market, leg.line)} · ${leg.selection}` }),
+    pcell(pct0(leg.modelProb), leg.modelProb, leg.market === "h2h" ? 0.33 : 0.5),
+    el("span", { class: "num", style: "color:var(--amber)", text: num(leg.bestOdds) }),
+  ]);
+}
+
+function accaCard(acca) {
+  const msg = el("span", { class: "note" });
+  const logBtn = el("button", { class: "icon-btn", title: "Log all legs as tracked bets" });
+  logBtn.innerHTML = plusIcon;
+  logBtn.addEventListener("click", async () => {
+    logBtn.disabled = true;
+    try {
+      for (const leg of acca.legs) await logLegBet(leg, 1, msg);
+      msg.textContent = `${acca.legs.length} legs logged to tracker`;
+    } catch (err) {
+      msg.textContent = err.message;
+    } finally {
+      logBtn.disabled = false;
+    }
+  });
+  return el("div", { class: "card", style: "box-shadow:0 0 12px rgba(59,130,246,0.12), inset 0 1px 0 rgba(255,255,255,0.02)" }, [
+    el("div", { class: "row-between" }, [
+      el("h3", { class: "section-title", text: "Today's ACCA" }),
+      el("span", { class: "chip static", text: `${acca.legs.length} legs` }),
+    ]),
+    ...acca.legs.map(legRow),
+    el("div", { class: "meta-row", style: "margin-top:10px;padding-top:10px;border-top:1px solid var(--line)" }, [
+      el("span", { class: "num", style: "color:var(--amber);font-size:17px", text: `Combined ${num(acca.combinedOdds)}` }),
+      el("span", { class: "num", text: `Model chance ${pct0(acca.combinedProb)}` }),
+      el("span", { class: "ev-pill", text: `${acca.evPct >= 0 ? "+" : ""}${(acca.evPct * 100).toFixed(1)}% EV` }),
+      el("span", { style: "flex:1" }),
+      logBtn,
+    ]),
+    el("div", { class: "meta-row" }, [el("span", { class: "note", style: "font-size:11px", text: "Accas multiply variance — combined chance drops with every leg." }), msg]),
+  ]);
+}
+
+function rolloverCard(rollover) {
+  const pathByDate = new Map(rollover.path.map((p) => [p.date, p]));
+  const stakeInput = el("input", { type: "number", min: "1", step: "1", value: "100", style: "width:72px", title: "Rollover stake" });
+  const projected = el("span", { class: "num", style: "color:var(--amber);font-size:15px" });
+  const recompute = () => {
+    const stake = Number(stakeInput.value) || 0;
+    const last = rollover.path[rollover.path.length - 1];
+    projected.textContent = last ? `${stake || 0} → ${(stake * last.cumulativeOdds).toFixed(0)}` : "–";
+  };
+  stakeInput.addEventListener("input", recompute);
+  recompute();
+
+  const dayRows = rollover.days.map((d) => {
+    const date = new Date(`${d.date}T12:00:00Z`);
+    const label = date.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+    const cum = pathByDate.get(d.date);
+    const logBtn = el("button", { class: "icon-btn", title: "Log this pick" });
+    logBtn.innerHTML = plusIcon;
+    logBtn.addEventListener("click", async () => {
+      logBtn.disabled = true;
+      try {
+        await logLegBet(d.leg, Number(stakeInput.value) || 1, projected);
+      } catch (err) {
+        projected.textContent = err.message;
+      } finally {
+        logBtn.disabled = false;
+      }
+    });
+    return el("div", { class: "mr-team", style: "gap:8px;margin:5px 0" }, [
+      el("span", { class: "small muted", style: "width:64px;flex-shrink:0", text: label }),
+      d.leg
+        ? el("span", { class: "name", text: `${d.leg.homeTeam} v ${d.leg.awayTeam}` })
+        : el("span", { class: "small muted", text: "no qualifying pick" }),
+      d.leg ? el("span", { class: "small muted", text: `${marketLabel(d.leg.market, d.leg.line)} · ${d.leg.selection}` }) : null,
+      d.leg ? pcell(pct0(d.leg.modelProb), d.leg.modelProb, d.leg.market === "h2h" ? 0.33 : 0.5) : null,
+      d.leg ? el("span", { class: "num", style: "color:var(--amber)", text: num(d.leg.bestOdds) }) : null,
+      d.leg ? logBtn : null,
+      el("span", { style: "flex:1" }),
+      el("span", { class: "num", text: cum ? `x${num(cum.cumulativeOdds)}` : "–" }),
+    ]);
+  });
+
+  return el("div", { class: "card", style: "box-shadow:0 0 12px rgba(59,130,246,0.12), inset 0 1px 0 rgba(255,255,255,0.02)" }, [
+    el("div", { class: "row-between" }, [
+      el("h3", { class: "section-title", text: "Weekly rollover" }),
+      el("label", { class: "small muted", style: "display:flex;align-items:center;gap:6px" }, ["stake", stakeInput]),
+    ]),
+    ...dayRows,
+    el("div", { class: "meta-row", style: "margin-top:10px;padding-top:10px;border-top:1px solid var(--line)" }, [
+      el("span", { text: "Projected: " }),
+      projected,
+      el("span", { class: "note", style: "font-size:11px", text: "one high-confidence pick per day; odds from current snapshots" }),
+    ]),
+  ]);
+}
+
+async function buildAccaSection() {
+  try {
+    const data = await getAcca();
+    const wrap = el("div", {});
+    if (data.acca) wrap.append(accaCard(data.acca));
+    if (data.rollover && data.rollover.path.length > 0) wrap.append(rolloverCard(data.rollover));
+    return wrap.childNodes.length > 0 ? wrap : null;
+  } catch (e) {
+    console.error("acca section failed", e);
+    return null;
+  }
+}
 
 function matchRow(league, f, isFirst) {
   const p = f.prediction;
