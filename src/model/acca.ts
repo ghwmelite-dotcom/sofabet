@@ -48,6 +48,11 @@ const DAY_MS = 86_400_000;
 const TODAY_HORIZON_MS = DAY_MS; // "today" = next 24h for the ACCA card
 const MAX_LEGS = 4;
 const ROLLOVER_MIN_PROB = 0.45;
+// ACCA legs need real substance: at low probabilities the raw-EV sort is
+// dominated by longshot noise (a 20% shot at 7.8 "beats" everything), and
+// compounding 2-4 of those builds a card that looks +EV while being pure
+// variance. Floor mirrors the rollover philosophy, relaxed one notch.
+const ACCA_LEG_MIN_PROB = 0.3;
 
 function toLeg(c: AccaCandidate): AccaLeg {
   return {
@@ -92,7 +97,7 @@ export function buildTodayAcca(candidates: AccaCandidate[], nowIso: string): Tod
   const pool = candidates
     .filter((c) => {
       const t = Date.parse(c.utc_date);
-      return t >= now && t <= horizon;
+      return t >= now && t <= horizon && c.model_prob >= ACCA_LEG_MIN_PROB;
     })
     .sort((a, b) => b.ev_pct - a.ev_pct);
   const seenMatches = new Set<number>();

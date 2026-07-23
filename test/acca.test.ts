@@ -68,6 +68,16 @@ describe("buildTodayAcca", () => {
     expect(acca?.legs.length).toBe(2);
   });
 
+  it("excludes longshot legs below the 0.30 prob floor even at the highest EV", () => {
+    const candidates = [
+      cand({ match_id: 1, model_prob: 0.2, best_odds: 7.8, ev_pct: 0.56, utc_date: "2026-07-23T22:00:00Z" }), // the Remo case
+      cand({ match_id: 2, model_prob: 0.65, best_odds: 1.82, ev_pct: 0.19, utc_date: "2026-07-23T22:00:00Z" }),
+      cand({ match_id: 3, model_prob: 0.55, best_odds: 2.0, ev_pct: 0.1, utc_date: "2026-07-23T23:00:00Z" }),
+    ];
+    const acca = buildTodayAcca(candidates, NOW);
+    expect(acca?.legs.map((l) => l.matchId)).toEqual([2, 3]);
+  });
+
   it("returns null with fewer than 2 legs", () => {
     expect(buildTodayAcca([cand({ match_id: 1 })], NOW)).toBeNull();
     expect(buildTodayAcca([], NOW)).toBeNull();
