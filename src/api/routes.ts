@@ -436,7 +436,13 @@ async function handleSnapshot(url: URL, env: Env, request: Request): Promise<Res
  * 1X2/DC/totals/BTTS with market/derived/model pricing tiers) + Weekly
  * Rollover (snapshot-based, unchanged). Read-only, no upstream calls.
  */
-async function handleAcca(env: Env): Promise<Response> {
+async function handleAcca(url: URL, env: Env): Promise<Response> {
+  const debug = url.searchParams.get("debug") === "1";
+  const dbg: { fixturesInWindow?: number; paramsFailed: string[]; teamsMissing: string[]; noLegPicked: string[]; pickedCount?: number } = {
+    paramsFailed: [],
+    teamsMissing: [],
+    noLegPicked: [],
+  };
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   const dayIso = new Date(now + 86_400_000).toISOString();
@@ -449,6 +455,7 @@ async function handleAcca(env: Env): Promise<Response> {
 
   // ACCA v2: fixtures in the next 24h with fitted params; per-match leg menu.
   const fixtures = await getUpcomingFixturesAll(env.DB, registryLeagues, nowIso, dayIso);
+  if (debug) dbg.fixturesInWindow = fixtures.length;
   // Latest snapshot per (match, market, selection, line) in the same window,
   // grouped per match for pricing (nullable — model legs work without it).
   const snapsByMatch = new Map<number, MatchSnapshot>();
@@ -478,8 +485,14 @@ async function handleAcca(env: Env): Promise<Response> {
       }
     }
     const params = paramsByLeague.get(f.league);
-    if (!params) continue;
-    if (!params.teamIds.includes(f.home_team_id) || !params.teamIds.includes(f.away_team_id)) continue;
+    if (!params) {
+      if (debug) dbg.paramsFailed.push(f.league);
+      continue;
+    }
+    if (!params.teamIds.includes(f.home_team_id) || !params.teamIds.includes(f.away_team_id)) {
+      if (debug) dbg.teamsMissing.push(`${f.home_name} v ${f.away_name}`);
+      continue;
+    }
     const gridMarkets = gridToMarkets(predictScoreGrid(params, f.home_team_id, f.away_team_id));
     const leg = pickBestLeg(legMenu(gridMarkets, snapsByMatch.get(f.id) ?? null));
     if (leg) {
@@ -487,13 +500,17 @@ async function handleAcca(env: Env): Promise<Response> {
         match: { matchId: f.id, league: f.league, utcDate: f.utc_date, homeTeam: f.home_name, awayTeam: f.away_name },
         leg,
       });
+    } else if (debug) {
+      dbg.noLegPicked.push(`${f.home_name} v ${f.away_name}`);
     }
   }
+  if (debug) dbg.pickedCount = picked.length;
 
   return json({
     generatedAt: nowIso,
     acca: buildTodayAccaV2(picked),
     rollover: buildWeeklyRollover(candidates, nowIso),
+    ...(debug ? { debug: dbg } : {}),
   });
 }
 
@@ -515,7 +532,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
     if (path === "/api/backtest" && method === "GET") return await handleBacktest(url, env);
     if (path === "/api/form" && method === "GET") return await handleForm(url, env);
     if (path === "/api/results" && method === "GET") return await handleResults(url, env);
-    if (path === "/api/acca" && method === "GET") return await handleAcca(env);
+    if (path === "/api/acca" && method === "GET") return await handleAcca(url, env);
     if (path === "/api/predictions/snapshot" && method === "POST") return await handleSnapshot(url, env, request);
     if (path === "/api/bets" || path.startsWith("/api/bets/")) return await handleBets(request, env, url);
     const modelMatch = /^\/api\/model\/([A-Za-z0-9]+)$/.exec(path);
