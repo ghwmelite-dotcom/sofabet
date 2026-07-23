@@ -1,7 +1,10 @@
 # Sofabet
 
 Football (soccer) match-outcome probabilities from a Dixon–Coles model, served
-as a JSON API on Cloudflare Workers + D1. Match results are ingested from the
+as a JSON API on Cloudflare Workers + D1. The UI's design system (tokens,
+typography, checklist) lives in `design-system/sofabet/MASTER.md` — the PWA
+implements it as an OLED-dark skin with self-hosted Fira Sans/Fira Code fonts
+(regenerate them with `npm run fonts`). Match results are ingested from the
 [football-data.org](https://www.football-data.org/) API; a per-league
 Dixon–Coles model (attack/defence ratings per team, home advantage, low-score
 correlation, exponential time decay) is fitted in the Worker, and the API

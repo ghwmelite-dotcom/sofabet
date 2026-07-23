@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .wrangler/
+.claude/
 .dev.vars
 worker-configuration.d.ts
 *.log

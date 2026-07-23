@@ -46,6 +46,13 @@ const pct0 = (p) => `${Math.round(p * 100)}%`;
 const num = (x, d = 2) => (x == null ? "–" : Number(x).toFixed(d));
 const money = (x) => (x == null ? "–" : (x > 0 ? "+" : "") + Number(x).toFixed(2));
 
+/* Inline SVG icons (Lucide-style paths) — never emoji/text characters. */
+const ICONS = {
+  star: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+};
+
 function loading() {
   return el("p", { class: "note", text: "Loading…" });
 }
@@ -94,17 +101,19 @@ function probHue(p, neutral) {
   return 45 + ((p - neutral) / (hi - neutral)) * (130 - 45);
 }
 
-function pcell(label, p, neutral = 0.5) {
+function pcell(label, p, neutral = 0.5, icon = null) {
   const hue = probHue(p, neutral);
   const confident = p >= Math.min(1, neutral + 0.25);
   const alpha = confident ? 0.95 : 0.85;
   const darkText = hue >= 35 && hue <= 60; // amber needs dark text for contrast
-  return el("span", {
+  const cell = el("span", {
     class: `pcell${darkText ? " dark-text" : ""}`,
     style: `background:hsl(${Math.round(hue)} 72% 42% / ${alpha})`,
     title: `${label} ${pct(p)}`,
-    text: label,
   });
+  if (icon) cell.innerHTML = icon;
+  cell.append(document.createTextNode(label));
+  return cell;
 }
 
 function formDots(recent) {
@@ -298,7 +307,7 @@ function matchRow(league, f, isFirst) {
       pcell("O2.5", p.over25),
       pcell("U2.5", 1 - p.over25),
       pcell("BTTS", p.bttsYes),
-      pcell(`★${tips[0][0]}`, tips[0][1], 0.33),
+      pcell(tips[0][0], tips[0][1], 0.33, ICONS.star),
     ];
   }
 
@@ -530,11 +539,13 @@ async function renderRatings(root, params) {
 /* ---------- #/accuracy (Record: live track record + backtest) ---------- */
 
 function gradeCell(label, hit) {
-  return el("span", {
+  const cell = el("span", {
     class: "pcell",
     style: `background:${hit ? "hsl(130 60% 30% / 0.95)" : "hsl(4 72% 42% / 0.9)"}`,
-    text: label,
   });
+  cell.append(document.createTextNode(label));
+  cell.insertAdjacentHTML("beforeend", hit ? ICONS.check : ICONS.x);
+  return cell;
 }
 
 async function renderAccuracy(root, params) {
@@ -624,10 +635,10 @@ function resultRow(m) {
     ]),
     el("span", { class: "num", style: "font-size:16px;font-weight:700", text: `${m.homeGoals}–${m.awayGoals}` }),
     el("div", { class: "mr-cells" }, [
-      gradeCell(`${sideLabel} ${pct0(sideProb)} ${g.outcomeHit ? "✓" : "✗"}`, g.outcomeHit),
-      gradeCell(`O2.5 ${pct0(snap.over25)} ${g.over25Hit ? "✓" : "✗"}`, g.over25Hit),
-      gradeCell(`BTTS ${pct0(snap.bttsYes)} ${g.bttsHit ? "✓" : "✗"}`, g.bttsHit),
-      gradeCell(`${snap.topScore} ${g.topScoreHit ? "✓" : "✗"}`, g.topScoreHit),
+      gradeCell(`${sideLabel} ${pct0(sideProb)}`, g.outcomeHit),
+      gradeCell(`O2.5 ${pct0(snap.over25)}`, g.over25Hit),
+      gradeCell(`BTTS ${pct0(snap.bttsYes)}`, g.bttsHit),
+      gradeCell(`${snap.topScore}`, g.topScoreHit),
     ]),
   ]);
 }
