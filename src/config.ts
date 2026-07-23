@@ -52,9 +52,10 @@ export const LEAGUES: Record<string, LeagueConfig> = {
   AUT: { name: "Bundesliga (Austria)", fdOrgCode: "", oddsSportKey: "soccer_austria_bundesliga", provider: UK, fdukCode: "AUT", tier: MINOR },
   SUI: { name: "Super League", fdOrgCode: "", oddsSportKey: "soccer_switzerland_superleague", provider: UK, fdukCode: "SWZ", tier: MINOR },
   POL: { name: "Ekstraklasa", fdOrgCode: "", oddsSportKey: "soccer_poland_ekstraklasa", provider: UK, fdukCode: "POL", tier: MINOR },
-  // ROU's key is unknown — unpinned so sportKeyFor falls back to live /sports title resolution.
-  ROU: { name: "Liga 1 (Romania)", fdOrgCode: "", oddsSportKey: "", provider: UK, fdukCode: "ROU", tier: MINOR },
-  JPN: { name: "J1 League", fdOrgCode: "", oddsSportKey: "soccer_japan_j_league", provider: UK, fdukCode: "JPN", tier: MINOR },
+  // DEN restored (covered by both sources); ROU dropped (no the-odds-api coverage).
+  DEN: { name: "Superliga (Denmark)", fdOrgCode: "", oddsSportKey: "soccer_denmark_superliga", provider: UK, fdukCode: "DNK", tier: MINOR },
+  // JPN dropped (no odds coverage; fduk results also lag a season). CHN fills the slot (calendar-year, active).
+  CHN: { name: "Super League (China)", fdOrgCode: "", oddsSportKey: "soccer_china_superleague", provider: UK, fdukCode: "CHN", tier: MINOR },
   MEX: { name: "Liga MX", fdOrgCode: "", oddsSportKey: "soccer_mexico_ligamx", provider: UK, fdukCode: "MEX", tier: MINOR },
   MLS: { name: "MLS", fdOrgCode: "", oddsSportKey: "soccer_usa_mls", provider: UK, fdukCode: "USA", tier: MINOR },
 };
