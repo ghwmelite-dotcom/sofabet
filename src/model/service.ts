@@ -9,8 +9,10 @@ import {
   getCardTrainingRows,
   getFinishedMatches,
   getModelCache,
+  getScheduledMatches,
   getTeams,
   setModelCache,
+  upsertPrediction,
 } from "../data/repo";
 import { fitDixonColes, predictExpectedGoals, predictScoreGrid } from "./dixonColes";
 import type { FittedParams } from "./dixonColes";
@@ -263,4 +265,60 @@ export async function backtestLeague(db: D1Database, league: string): Promise<Ba
   const matches = await getFinishedMatches(db, league);
   const result = runBacktest(matches);
   return { league, ...result };
+}
+
+export interface SnapshotResult {
+  written: number;
+  skipped: number;
+}
+
+/**
+ * Write pre-kickoff prediction snapshots for a league.
+ *
+ * HONESTY RULE: predictions are graded ONLY from snapshots taken BEFORE
+ * kickoff. We never recompute "what the model would have said" for a finished
+ * match — by then the model may have refit on the result, which would backfit
+ * the record. Fixtures that finished before this feature shipped simply have
+ * no snapshot: the track record starts empty and accumulates from deploy day.
+ *
+ * getScheduledMatches returns only SCHEDULED/TIMED rows, so IN_PLAY/PAUSED/
+ * FINISHED matches never reach the upsert (a finished match's frozen row can
+ * never be overwritten here); the status filter below is belt-and-braces.
+ * Fixtures whose teams are missing from the fitted params (newcomers) are
+ * skipped, same rule as the fixtures endpoint.
+ */
+export async function snapshotUpcomingPredictions(db: D1Database, league: string): Promise<SnapshotResult> {
+  const fixtures = await getScheduledMatches(db, league);
+  const { params, meta } = await getOrFitParams(db, league);
+  const teamIds = new Set(params.teamIds);
+  const nowIso = new Date().toISOString();
+  let written = 0;
+  let skipped = 0;
+  for (const f of fixtures) {
+    if (f.status !== "SCHEDULED" && f.status !== "TIMED") {
+      skipped++;
+      continue;
+    }
+    if (!teamIds.has(f.home_team_id) || !teamIds.has(f.away_team_id)) {
+      skipped++;
+      continue;
+    }
+    const markets = gridToMarkets(predictScoreGrid(params, f.home_team_id, f.away_team_id));
+    const over25 = markets.overUnder.find((l) => l.line === 2.5)?.over ?? 0;
+    const top = markets.topScores[0];
+    await upsertPrediction(db, {
+      matchId: f.id,
+      league,
+      homeWin: markets.homeWin,
+      draw: markets.draw,
+      awayWin: markets.awayWin,
+      over25,
+      bttsYes: markets.bttsYes,
+      topScore: top ? `${top.home}-${top.away}` : "0-0",
+      modelFittedAt: meta.fittedAt,
+      nowIso,
+    });
+    written++;
+  }
+  return { written, skipped };
 }

@@ -4,7 +4,7 @@
  * an argument — no global state.
  */
 
-import type { CardMatch, FormMatchRow, IngestedMatch, MatchRow, ModelMatch, OddsSnapshotRow, TeamRow } from "../types";
+import type { CardMatch, FormMatchRow, IngestedMatch, MatchRow, ModelMatch, OddsSnapshotRow, PredictionRow, TeamRow } from "../types";
 
 const BATCH_CHUNK = 50;
 
@@ -427,5 +427,78 @@ export async function getRecentTeamMatches(
     )
     .bind(league, teamId, teamId, limit)
     .all<FormMatchRow>();
+  return results;
+}
+
+/* ---- predictions (pre-kickoff snapshots) ---- */
+
+export interface PredictionUpsert {
+  matchId: number;
+  league: string;
+  homeWin: number;
+  draw: number;
+  awayWin: number;
+  over25: number;
+  bttsYes: number;
+  topScore: string;
+  modelFittedAt: string;
+  nowIso: string;
+}
+
+/** Insert or refresh a pre-kickoff snapshot. created_at sticks on insert;
+ * updated_at always moves (both are before kickoff by construction — the
+ * writer only ever sees SCHEDULED/TIMED fixtures). */
+export async function upsertPrediction(db: D1Database, p: PredictionUpsert): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO predictions
+         (match_id, league, home_win, draw, away_win, over25, btts_yes, top_score, model_fitted_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(match_id) DO UPDATE SET
+         home_win = excluded.home_win,
+         draw = excluded.draw,
+         away_win = excluded.away_win,
+         over25 = excluded.over25,
+         btts_yes = excluded.btts_yes,
+         top_score = excluded.top_score,
+         model_fitted_at = excluded.model_fitted_at,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(p.matchId, p.league, p.homeWin, p.draw, p.awayWin, p.over25, p.bttsYes, p.topScore, p.modelFittedAt, p.nowIso, p.nowIso)
+    .run();
+}
+
+export async function countPredictions(db: D1Database, league: string): Promise<number> {
+  const row = await db
+    .prepare("SELECT COUNT(*) AS c FROM predictions WHERE league = ?")
+    .bind(league)
+    .first<{ c: number }>();
+  return row?.c ?? 0;
+}
+
+export interface GradableMatchRow extends PredictionRow {
+  utc_date: string;
+  home_goals: number;
+  away_goals: number;
+  home_name: string;
+  away_name: string;
+}
+
+/** FINISHED matches with a snapshot, newest first, within `sinceIso`. */
+export async function getGradableMatches(db: D1Database, league: string, sinceIso: string): Promise<GradableMatchRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.*, m.utc_date, m.home_goals, m.away_goals, ht.name AS home_name, at.name AS away_name
+       FROM predictions p
+       JOIN matches m ON m.id = p.match_id
+       JOIN teams ht ON ht.id = m.home_team_id
+       JOIN teams at ON at.id = m.away_team_id
+       WHERE m.league = ? AND m.status = 'FINISHED'
+         AND m.home_goals IS NOT NULL AND m.away_goals IS NOT NULL
+         AND m.utc_date >= ?
+       ORDER BY m.utc_date DESC`,
+    )
+    .bind(league, sinceIso)
+    .all<GradableMatchRow>();
   return results;
 }

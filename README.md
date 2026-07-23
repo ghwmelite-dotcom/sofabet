@@ -86,6 +86,8 @@ All responses are JSON. Errors are `{"error": "..."}` with a sensible status.
 | `GET /api/model/:league[?kind=goals\|cards]` | Fitted ratings table (attack/defence per team, home advantage, rho, fitted_at, match_count). `kind=cards` returns the yellow-card ratings fitted on `match_stats` |
 | `GET /api/backtest?league=PL` | Walk-forward backtest: log loss / Brier / RPS for model vs base-rate baseline vs uniform, decile calibration table |
 | `GET /api/form?league=PL&team=<id\|name>` | Team form: last 5 finished matches (opponent, venue, score, W/D/L) newest first, plus gf/ga totals overall and over the last 5 home / last 5 away games |
+| `GET /api/results?league=PL[&days=14]` | Graded track record: FINISHED matches INNER JOIN their pre-kickoff prediction snapshots (1X2 predicted side + hit, O2.5/BTTS/top-score hits, logLoss, Brier), newest first, plus aggregate summary. `days` 1–60. 200 with a `note` when no snapshots exist yet |
+| `POST /api/predictions/snapshot?league=PL` | SYNC_KEY-protected. Force a pre-kickoff snapshot write for the league outside the daily cron (e.g. right after a manual fixture sync) |
 
 ## PWA + bet tracker
 
@@ -170,3 +172,11 @@ rule keyed on the number of matches with bookings.
 
 Backtest: burn-in on the first 60 matches, then refit every 8 matches on an
 expanding window and predict the next block. Needs ≥ 150 finished matches.
+
+Track record (the "Record" tab): the daily cron snapshots pre-kickoff
+predictions into `predictions` right after each league's refit. Grading uses
+ONLY those frozen snapshots — never a recomputed "what the model would have
+said", because after a result is ingested the model may refit on it and the
+record would be backfitted. Matches that finished before this feature shipped
+have no snapshot and stay ungraded: the record starts empty and accumulates
+from deploy day.

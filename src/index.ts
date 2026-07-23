@@ -11,7 +11,7 @@ import { FootballDataClient } from "./data/footballData";
 import { syncAllLeagues } from "./data/sync";
 import { syncOddsLeague } from "./data/syncOdds";
 import { syncStatsBatch } from "./data/syncStats";
-import { refitLeague } from "./model/service";
+import { refitLeague, snapshotUpcomingPredictions } from "./model/service";
 import { StatsRestrictedError } from "./types";
 
 const DAILY_CRON = "17 4 * * *";
@@ -35,6 +35,12 @@ async function runDaily(env: Env, cron: string): Promise<void> {
     try {
       const meta = await refitLeague(env.DB, league);
       console.log(JSON.stringify({ message: "league refit", league, refitted: meta !== null, meta }));
+      // Snapshot pre-kickoff predictions right after the refit so they always
+      // use the freshest params (see the honesty rule on the writer).
+      if (meta !== null) {
+        const snap = await snapshotUpcomingPredictions(env.DB, league);
+        console.log(JSON.stringify({ message: "predictions snapshotted", league, ...snap }));
+      }
     } catch (e) {
       console.error(
         JSON.stringify({ message: "league refit failed", league, error: e instanceof Error ? e.message : String(e) }),

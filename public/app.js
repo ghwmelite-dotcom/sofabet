@@ -527,16 +527,121 @@ async function renderRatings(root, params) {
   }
 }
 
-/* ---------- #/accuracy ---------- */
+/* ---------- #/accuracy (Record: live track record + backtest) ---------- */
 
-async function renderAccuracy(root) {
+function gradeCell(label, hit) {
+  return el("span", {
+    class: "pcell",
+    style: `background:${hit ? "hsl(130 60% 30% / 0.95)" : "hsl(4 72% 42% / 0.9)"}`,
+    text: label,
+  });
+}
+
+async function renderAccuracy(root, params) {
+  root.replaceChildren(el("h2", { class: "screen-title", text: "Record" }));
+  const track = el("div", {});
+  root.append(track);
+  await renderTrackRecord(track, params);
+  renderBacktestSection(root);
+}
+
+async function renderTrackRecord(root, params) {
   root.replaceChildren(loading());
   try {
     const leagues = await loadLeagues();
+    const pool = leagues.filter((l) => l.matches.finished > 0);
+    const selected = params.get("league") && pool.some((l) => l.key === params.get("league")) ? params.get("league") : pool[0]?.key;
+    const days = [7, 14, 30].includes(Number(params.get("days"))) ? Number(params.get("days")) : 14;
+    const repick = (league, d) => {
+      const p = new URLSearchParams();
+      if (league) p.set("league", league);
+      if (d) p.set("days", String(d));
+      renderTrackRecord(root, p);
+    };
+    const dayChips = el(
+      "div",
+      { class: "chips" },
+      [7, 14, 30].map((d) => el("button", { class: `chip${d === days ? " active" : ""}`, text: `${d} days`, onclick: () => repick(selected, d) })),
+    );
+    const content = el("div", {});
+    root.replaceChildren(
+      el("h3", { class: "section-title", text: "Live track record" }),
+      leagueChips(selected, (key) => repick(key, days), pool),
+      dayChips,
+      content,
+    );
+    if (!selected) {
+      content.append(el("p", { class: "note", text: "No finished matches yet." }));
+      return;
+    }
+    const data = await api(`/api/results?league=${encodeURIComponent(selected)}&days=${days}`);
+    if (data.summary === null) {
+      content.append(
+        el("div", { class: "card" }, [
+          el("p", { class: "note", text: data.note ?? "No graded matches in this window yet — snapshots accumulate from the daily cron." }),
+        ]),
+      );
+      return;
+    }
+    const s = data.summary;
+    content.append(
+      el("div", { class: "chips" }, [
+        el("span", { class: "chip static", text: `1X2 ${pct0(s.outcomeHitRate)}` }),
+        el("span", { class: "chip static", text: `logLoss ${num(s.meanLogLoss)}` }),
+        el("span", { class: "chip static", text: `O2.5 ${pct0(s.over25HitRate)}` }),
+        el("span", { class: "chip static", text: `BTTS ${pct0(s.bttsHitRate)}` }),
+        el("span", { class: "chip static", text: `${s.count} graded` }),
+      ]),
+    );
+    if (data.matches.length === 0) {
+      content.append(el("p", { class: "note", text: "Snapshots exist but none of their matches have finished in this window yet." }));
+      return;
+    }
+    const byDay = new Map();
+    for (const m of data.matches) {
+      const key = localDayKey(new Date(m.utcDate));
+      if (!byDay.has(key)) byDay.set(key, []);
+      byDay.get(key).push(m);
+    }
+    for (const dayMatches of byDay.values()) {
+      content.append(el("div", { class: "date-header", text: dayHeader(dayMatches[0].utcDate) }));
+      for (const m of dayMatches) content.append(resultRow(m));
+    }
+  } catch (err) {
+    root.replaceChildren(errorBox(err));
+  }
+}
+
+function resultRow(m) {
+  const snap = m.snapshot;
+  const g = m.grade;
+  const sideLabel = { home: "1", draw: "X", away: "2" }[g.predicted];
+  const sideProb = g.predicted === "home" ? snap.homeWin : g.predicted === "draw" ? snap.draw : snap.awayWin;
+  return el("div", { class: "match-row", style: "cursor:default" }, [
+    el("div", { class: "mr-teams" }, [
+      el("div", { class: "mr-team" }, [crest(m.homeTeam, 24), el("span", { class: "name", text: m.homeTeam })]),
+      el("div", { class: "mr-team" }, [crest(m.awayTeam, 24), el("span", { class: "name", text: m.awayTeam })]),
+    ]),
+    el("span", { class: "num", style: "font-size:16px;font-weight:700", text: `${m.homeGoals}–${m.awayGoals}` }),
+    el("div", { class: "mr-cells" }, [
+      gradeCell(`${sideLabel} ${pct0(sideProb)} ${g.outcomeHit ? "✓" : "✗"}`, g.outcomeHit),
+      gradeCell(`O2.5 ${pct0(snap.over25)} ${g.over25Hit ? "✓" : "✗"}`, g.over25Hit),
+      gradeCell(`BTTS ${pct0(snap.bttsYes)} ${g.bttsHit ? "✓" : "✗"}`, g.bttsHit),
+      gradeCell(`${snap.topScore} ${g.topScoreHit ? "✓" : "✗"}`, g.topScoreHit),
+    ]),
+  ]);
+}
+
+async function renderBacktestSection(root) {
+  const section = el("div", {});
+  section.append(el("h3", { class: "section-title", style: "margin-top:20px", text: "Historical backtest" }));
+  root.append(section);
+  try {
+    const leagues = await loadLeagues();
     const pool = leagues.filter((l) => l.matches.finished >= 150);
-    root.replaceChildren(el("p", { class: "note", text: "Walk-forward backtest per league (loads on demand — it is CPU-heavy)." }));
+    section.append(el("p", { class: "note", text: "Walk-forward backtest per league (loads on demand — it is CPU-heavy). Uses only data that existed at each prediction time." }));
     if (pool.length === 0) {
-      root.append(el("p", { class: "note", text: "No league with 150+ finished matches yet." }));
+      section.append(el("p", { class: "note", text: "No league with 150+ finished matches yet." }));
       return;
     }
     for (const l of pool) {
@@ -554,10 +659,10 @@ async function renderAccuracy(root) {
           btn.textContent = "Load backtest";
         }
       });
-      root.append(card);
+      section.append(card);
     }
   } catch (err) {
-    root.replaceChildren(errorBox(err));
+    section.append(errorBox(err));
   }
 }
 
@@ -984,7 +1089,7 @@ function route() {
     renderValue(root, params);
   } else if (path === "#/accuracy") {
     setActiveNav("accuracy");
-    renderAccuracy(root);
+    renderAccuracy(root, params);
   } else if (path === "#/bets") {
     setActiveNav("bets");
     renderBets(root);

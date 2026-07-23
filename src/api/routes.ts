@@ -9,6 +9,8 @@ import { FootballDataClient } from "../data/footballData";
 import {
   countOddsSnapshots,
   countPendingStats,
+  countPredictions,
+  getGradableMatches,
   getMatchCountsByLeague,
   getMeta,
   getOddsSnapshotsForLeague,
@@ -23,9 +25,17 @@ import { syncStatsBatch } from "../data/syncStats";
 import { InsufficientDataError } from "../model/backtest";
 import { predictScoreGrid } from "../model/dixonColes";
 import { computeTeamForm } from "../model/form";
+import { gradePrediction, summarizeGrades } from "../model/grade";
 import { gridToMarkets } from "../model/markets";
 import { isValueRow, latestPerCombo } from "../model/odds";
-import { backtestLeague, getOrFitCards, getOrFitParams, predictMatch, resolveTeam } from "../model/service";
+import {
+  backtestLeague,
+  getOrFitCards,
+  getOrFitParams,
+  predictMatch,
+  resolveTeam,
+  snapshotUpcomingPredictions,
+} from "../model/service";
 import { FootballDataError, HttpError, OddsRestrictedError, StatsRestrictedError } from "../types";
 import { handleBets } from "./bets";
 import { json, requireSyncKey } from "./util";
@@ -346,6 +356,62 @@ async function handleForm(url: URL, env: Env): Promise<Response> {
   return json({ league, team, ...form });
 }
 
+/** GET /api/results?league=X[&days=14] — graded pre-kickoff snapshots. */
+async function handleResults(url: URL, env: Env): Promise<Response> {
+  const league = requireLeagueParam(url);
+  await requireKnownLeague(env, league);
+  const rawDays = url.searchParams.get("days");
+  const days = rawDays === null ? 14 : Number(rawDays);
+  if (!Number.isInteger(days) || days < 1 || days > 60) {
+    throw new HttpError(400, "'days' must be an integer between 1 and 60");
+  }
+  const snapshotCount = await countPredictions(env.DB, league);
+  if (snapshotCount === 0) {
+    return json({
+      league,
+      days,
+      matches: [],
+      summary: null,
+      note: "no snapshots yet — the track record starts collecting at the next daily snapshot",
+    });
+  }
+  const sinceIso = new Date(Date.now() - days * 86_400_000).toISOString();
+  const rows = await getGradableMatches(env.DB, league, sinceIso);
+  const matches = rows.map((r) => ({
+    matchId: r.match_id,
+    utcDate: r.utc_date,
+    homeTeam: r.home_name,
+    awayTeam: r.away_name,
+    homeGoals: r.home_goals,
+    awayGoals: r.away_goals,
+    snapshot: {
+      homeWin: r.home_win,
+      draw: r.draw,
+      awayWin: r.away_win,
+      over25: r.over25,
+      bttsYes: r.btts_yes,
+      topScore: r.top_score,
+      modelFittedAt: r.model_fitted_at,
+    },
+    grade: gradePrediction(r, r.home_goals, r.away_goals),
+  }));
+  const daysWithData = new Set(matches.map((m) => m.utcDate.slice(0, 10))).size;
+  return json({ league, days, daysWithData, matches, summary: summarizeGrades(matches.map((m) => m.grade)) });
+}
+
+/**
+ * POST /api/predictions/snapshot?league=X — SYNC_KEY-protected admin hook:
+ * force a pre-kickoff snapshot write outside the daily cron (e.g. right
+ * after a manual fixture sync).
+ */
+async function handleSnapshot(url: URL, env: Env, request: Request): Promise<Response> {
+  requireSyncKey(env, request);
+  const league = requireLeagueParam(url);
+  await requireKnownLeague(env, league);
+  const result = await snapshotUpcomingPredictions(env.DB, league);
+  return json({ ok: true, league, ...result });
+}
+
 export async function handleRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -362,6 +428,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
     if (path === "/api/predict" && method === "GET") return await handlePredict(url, env);
     if (path === "/api/backtest" && method === "GET") return await handleBacktest(url, env);
     if (path === "/api/form" && method === "GET") return await handleForm(url, env);
+    if (path === "/api/results" && method === "GET") return await handleResults(url, env);
+    if (path === "/api/predictions/snapshot" && method === "POST") return await handleSnapshot(url, env, request);
     if (path === "/api/bets" || path.startsWith("/api/bets/")) return await handleBets(request, env, url);
     const modelMatch = /^\/api\/model\/([A-Za-z0-9]+)$/.exec(path);
     if (modelMatch && method === "GET") return await handleModel(modelMatch[1].toUpperCase(), url, env);

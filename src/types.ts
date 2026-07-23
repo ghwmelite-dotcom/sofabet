@@ -158,3 +158,18 @@ export interface FormMatchRow {
   home_name: string;
   away_name: string;
 }
+
+/** Pre-kickoff prediction snapshot row (predictions table). */
+export interface PredictionRow {
+  match_id: number;
+  league: string;
+  home_win: number;
+  draw: number;
+  away_win: number;
+  over25: number;
+  btts_yes: number;
+  top_score: string;
+  model_fitted_at: string;
+  created_at: string;
+  updated_at: string;
+}
