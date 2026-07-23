@@ -3,10 +3,13 @@
  * fdOrgCode is the football-data.org v4 competition code; oddsSportKey is the
  * the-odds-api v4 sport key (pinned explicitly — title-based resolution once
  * matched "Premier League" to soccer_russia_premier_league). provider picks
- * the match-data source: "fdorg" (all free-tier competitions) or
- * "apifootball" (api-sports.io, for the Nordic summer leagues fdorg's free
- * tier lacks). apiFootballId is API-Football's published league id (their
- * docs/leagues list; dashboard.api-football.com).
+ * the match-data source:
+ * - "fdorg"       — football-data.org (free-tier competitions + bookings)
+ * - "fduk"        — football-data.co.uk CSV files (Nordic leagues; no key
+ *                   needed). fdukCode is the /new/{CODE}.csv file code.
+ * - "apifootball" — api-sports.io (kept for a possible paid tier; its free
+ *                   plan only serves seasons 2022–2024, so no league routes
+ *                   to it today).
  */
 
 export interface LeagueConfig {
@@ -14,13 +17,15 @@ export interface LeagueConfig {
   fdOrgCode: string;
   /** the-odds-api sport key. Checked before any cached/derived mapping. */
   oddsSportKey: string;
-  provider: "fdorg" | "apifootball";
-  /** API-Football league id (provider "apifootball" only). */
+  provider: "fdorg" | "apifootball" | "fduk";
+  /** football-data.co.uk /new/{fdukCode}.csv file code (provider "fduk"). */
+  fdukCode?: string;
+  /** API-Football league id (provider "apifootball"; unused while free). */
   apiFootballId?: number;
 }
 
 const FD = "fdorg" as const;
-const AF = "apifootball" as const;
+const UK = "fduk" as const;
 
 export const LEAGUES: Record<string, LeagueConfig> = {
   PL: { name: "Premier League", fdOrgCode: "PL", oddsSportKey: "soccer_epl", provider: FD },
@@ -34,11 +39,12 @@ export const LEAGUES: Record<string, LeagueConfig> = {
   // Brazilian Série A — on both free tiers and plays Feb–Dec, i.e. it has live
   // fixtures during the European summer break.
   BSA: { name: "Brasileirão Série A", fdOrgCode: "BSA", oddsSportKey: "soccer_brazil_campeonato", provider: FD },
-  // Nordic summer-calendar leagues via API-Football (api-sports.io league ids
-  // 113/119/103/244 from their leagues list — football-data.org's free tier
-  // does not carry Scandinavia). In season roughly March–November.
-  SWE: { name: "Allsvenskan", fdOrgCode: "", oddsSportKey: "soccer_sweden_allsvenskan", provider: AF, apiFootballId: 113 },
-  DEN: { name: "Superliga", fdOrgCode: "", oddsSportKey: "soccer_denmark_superliga", provider: AF, apiFootballId: 119 },
-  NOR: { name: "Eliteserien", fdOrgCode: "", oddsSportKey: "soccer_norway_eliteserien", provider: AF, apiFootballId: 103 },
-  FIN: { name: "Veikkausliiga", fdOrgCode: "", oddsSportKey: "soccer_finland_veikkausliiga", provider: AF, apiFootballId: 244 },
+  // Nordic leagues via football-data.co.uk CSVs (free, no key, updated ~twice
+  // weekly). SWE/NOR/FIN are single-year summer leagues; DEN is a winter
+  // league with split-year season labels (2025/2026).
+  SWE: { name: "Allsvenskan", fdOrgCode: "", oddsSportKey: "soccer_sweden_allsvenskan", provider: UK, fdukCode: "SWE" },
+  DEN: { name: "Superliga", fdOrgCode: "", oddsSportKey: "soccer_denmark_superliga", provider: UK, fdukCode: "DNK" },
+  NOR: { name: "Eliteserien", fdOrgCode: "", oddsSportKey: "soccer_norway_eliteserien", provider: UK, fdukCode: "NOR" },
+  FIN: { name: "Veikkausliiga", fdOrgCode: "", oddsSportKey: "soccer_finland_veikkausliiga", provider: UK, fdukCode: "FIN" },
 };
+

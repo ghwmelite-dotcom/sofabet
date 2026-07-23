@@ -156,6 +156,14 @@ export class QuotaExceededError extends Error {
   }
 }
 
+/** football-data.co.uk CSV fetch failure; routes map it like other upstream errors. */
+export class FdukError extends FootballDataError {
+  constructor(message: string, status: number) {
+    super(message, status);
+    this.name = "FdukError";
+  }
+}
+
 /** Row of odds_snapshots joined to its match (with team names). */
 export interface OddsSnapshotRow {
   id: number;

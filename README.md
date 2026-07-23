@@ -37,18 +37,20 @@ yellow-cards model, team ratings, and walk-forward backtests.
 | Provider | Leagues | Notes |
 |---|---|---|
 | football-data.org (`fdorg`) | PL, ELC, BL1, SA, PD, FL1, DED, PPL, BSA | Free tier 10 req/min; bookings (cards) endpoint |
-| API-Football (`apifootball`, api-sports.io) | SWE (113), DEN (119), NOR (103), FIN (244) | Free tier **100 requests/day**, guarded locally at 95 via a D1 daily counter (`af_calls_<utc-date>`); 1s call spacing; league ids are namespaced (+9e9) so they can never collide with fdorg ids |
+| football-data.co.uk (`fduk`) | SWE, DEN, NOR, FIN | Free CSVs, no key, updated ~twice weekly; files include closing odds (earmarked for a future "backtest vs real prices" feature); ids are synthetic hashes (+8e9 namespace) |
+| API-Football (`apifootball`, api-sports.io) | none today | Client kept for a possible paid tier; its **free plan only serves seasons 2022–2024** (no current Nordic season), so no league routes to it and the key is optional/unused |
 
-The Nordic leagues play summer calendars (roughly March–November), so they
-fill the European off-season alongside BSA. Cards/stats stay fdorg-only:
-`/api/sync-stats` rejects apifootball leagues, and `/api/predict` returns
-`cards: null` with a coverage note for them.
+The Nordic leagues play summer calendars (SWE/NOR/FIN roughly
+March–November; DEN Superliga is actually a winter league, July–May, with
+split-year season labels — the sync handles both), filling the European
+off-season alongside BSA. Cards/stats stay fdorg-only: `/api/sync-stats`
+rejects non-fdorg leagues, and `/api/predict` returns `cards: null` with a
+coverage note for them.
 
-Setup for API-Football: register free at
-[dashboard.api-football.com](https://dashboard.api-football.com/register),
-then `npx wrangler secret put API_FOOTBALL_KEY` and
-`POST /api/sync?league=SWE&seasons=3` (calendar-year seasons: 2026, 2025,
-2024). Exceeding the daily guard returns 429 until the UTC day rolls over.
+Setup for API-Football (only needed if a paid plan is ever added): register
+at [dashboard.api-football.com](https://dashboard.api-football.com/register),
+then `npx wrangler secret put API_FOOTBALL_KEY`. The fduk Nordic sync needs
+no key at all: `POST /api/sync?league=SWE&seasons=3`.
 
 ## Setup (production)
 

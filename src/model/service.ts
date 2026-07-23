@@ -231,9 +231,9 @@ export async function predictMatch(
   const { lambda, mu } = predictExpectedGoals(params, home.id, away.id);
 
   // Cards are best-effort: coverage below the threshold (or teams missing
-  // from the cards window) yields cards: null, never an error. API-Football
+  // from the cards window) yields cards: null, never an error. Non-fdorg
   // leagues have no bookings source at all — cards stays null with a note.
-  const cardsUnsupported = LEAGUES[league]?.provider === "apifootball";
+  const cardsUnsupported = LEAGUES[league]?.provider !== undefined && LEAGUES[league].provider !== "fdorg";
   const statsCount = cardsUnsupported ? 0 : await countCardStats(db, league);
   let cards: CardsMarkets | null = null;
   let cardsModel: ModelMeta | null = null;
@@ -264,7 +264,7 @@ export async function predictMatch(
     cardsCoverage: {
       statsCount,
       required: MIN_STATS_TO_FIT,
-      ...(cardsUnsupported ? { note: "cards pipeline is fdorg-only; this league syncs via API-Football" } : {}),
+      ...(cardsUnsupported ? { note: "cards pipeline is fdorg-only; this league syncs via another provider" } : {}),
     },
   };
 }

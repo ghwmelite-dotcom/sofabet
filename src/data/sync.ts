@@ -8,6 +8,15 @@
 import { LEAGUES } from "../config";
 import { ApiFootballClient, afCallsUtcKey, apiFootballSeasons } from "./apiFootball";
 import type { AfQuotaStore } from "./apiFootball";
+import {
+  fetchFdukText,
+  fdukFixturesUrl,
+  fdukLeagueFileUrl,
+  fixturesRowsToIngest,
+  leagueRowsToIngest,
+  parseCsv,
+} from "./fduk";
+import type { SeasonStyle } from "./fduk";
 import { FootballDataClient } from "./footballData";
 import { getMeta, getTeamIdMap, setMeta, upsertMatches, upsertTeams } from "./repo";
 import { FootballDataError, HttpError } from "../types";
@@ -30,6 +39,7 @@ export interface LeagueSyncResult {
   seasons?: SeasonSyncResult[];
   apiCalls?: number;
   quotaWarning?: boolean;
+  fixtures?: number;
   error?: string;
 }
 
@@ -143,7 +153,8 @@ async function syncLeagueApiFootball(db: D1Database, client: ApiFootballClient, 
 
 /**
  * Sync one league. `seasons` = how many seasons to fetch including the
- * current one (calendar-year seasons for API-Football leagues).
+ * current one (calendar-year seasons for API-Football leagues; most-recent
+ * seasons present in the file for football-data.co.uk leagues).
  */
 export async function syncLeague(
   db: D1Database,
@@ -151,10 +162,14 @@ export async function syncLeague(
   leagueKey: string,
   seasons: number,
   clients?: { fdorg?: FootballDataClient; apifootball?: ApiFootballClient },
+  fdukCache?: FdukRunCache,
 ): Promise<LeagueSyncResult> {
   const cfg = LEAGUES[leagueKey];
   if (!cfg) {
     throw new Error(`unknown league '${leagueKey}'`);
+  }
+  if (cfg.provider === "fduk") {
+    return syncLeagueFduk(db, leagueKey, seasons, fdukCache ?? { seasonStyle: new Map() });
   }
   if (cfg.provider === "apifootball") {
     const apiKey = env.API_FOOTBALL_KEY;
@@ -168,15 +183,82 @@ export async function syncLeague(
   return syncLeagueFdorg(db, client, leagueKey, seasons, cfg.fdOrgCode);
 }
 
+/** Run-scoped cache so fixtures.csv is fetched at most once per sync run. */
+export interface FdukRunCache {
+  fixturesRows?: string[][];
+  seasonStyle: Map<string, SeasonStyle>;
+}
+
+/**
+ * football-data.co.uk sync (no key needed): one league file + the shared
+ * fixtures.csv per run. Be polite — each file is fetched at most once per
+ * run; the daily cron is our only automated fetch.
+ */
+async function syncLeagueFduk(
+  db: D1Database,
+  leagueKey: string,
+  seasons: number,
+  cache: FdukRunCache,
+): Promise<LeagueSyncResult> {
+  const cfg = LEAGUES[leagueKey];
+  const code = cfg.fdukCode as string;
+  let apiCalls = 0;
+
+  const text = await fetchFdukText(fdukLeagueFileUrl(code));
+  apiCalls++;
+  const ingest = leagueRowsToIngest(parseCsv(text), leagueKey, seasons);
+  cache.seasonStyle.set(leagueKey, ingest.style);
+
+  // Upsert season by season (reporting granularity matches other providers).
+  const bySeason = new Map<string, IngestedMatch[]>();
+  for (const m of ingest.matches) {
+    const list = bySeason.get(m.season) ?? [];
+    list.push(m);
+    bySeason.set(m.season, list);
+  }
+  const seasonResults: SeasonSyncResult[] = [];
+  let teamTotal = 0;
+  for (const [season, ms] of [...bySeason.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const stored = await storeSeason(db, leagueKey, ms);
+    teamTotal = Math.max(teamTotal, stored.teams);
+    seasonResults.push({ season, matches: stored.result.matches, skipped: stored.result.skipped });
+  }
+
+  // Upcoming fixtures from the shared fixtures.csv (empty when the site's
+  // file currently lists no fixtures for this league — that's normal).
+  if (!cache.fixturesRows) {
+    const ftext = await fetchFdukText(fdukFixturesUrl());
+    apiCalls++;
+    cache.fixturesRows = parseCsv(ftext);
+  }
+  const upcoming = fixturesRowsToIngest(cache.fixturesRows, new Map([[code, leagueKey]]), cache.seasonStyle);
+  let fixturesStored = 0;
+  if (upcoming.length > 0) {
+    const stored = await storeSeason(db, leagueKey, upcoming);
+    fixturesStored = stored.result.matches;
+  }
+
+  return {
+    league: leagueKey,
+    ok: true,
+    provider: "fduk",
+    teams: teamTotal,
+    seasons: seasonResults,
+    apiCalls,
+    fixtures: fixturesStored,
+  };
+}
+
 /** Sync every league in the registry, sequentially, sharing one client per provider. */
 export async function syncAllLeagues(db: D1Database, env: Env, seasons: number): Promise<LeagueSyncResult[]> {
   const clients: { fdorg?: FootballDataClient; apifootball?: ApiFootballClient } = {};
   if (env.FOOTBALL_DATA_TOKEN) clients.fdorg = new FootballDataClient(env.FOOTBALL_DATA_TOKEN);
   if (env.API_FOOTBALL_KEY) clients.apifootball = new ApiFootballClient(env.API_FOOTBALL_KEY, afQuotaStore(db));
+  const fdukCache: FdukRunCache = { seasonStyle: new Map() };
   const results: LeagueSyncResult[] = [];
   for (const key of Object.keys(LEAGUES)) {
     try {
-      results.push(await syncLeague(db, env, key, seasons, clients));
+      results.push(await syncLeague(db, env, key, seasons, clients, fdukCache));
       console.log(JSON.stringify({ message: "league synced", league: key, provider: LEAGUES[key].provider, seasons }));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
