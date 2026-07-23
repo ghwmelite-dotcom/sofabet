@@ -14,6 +14,7 @@ import {
   setModelCache,
   upsertPrediction,
 } from "../data/repo";
+import { LEAGUES } from "../config";
 import { fitDixonColes, predictExpectedGoals, predictScoreGrid } from "./dixonColes";
 import type { FittedParams } from "./dixonColes";
 import { cardsGridToMarkets, fitCards, predictCardsGrid } from "./cards";
@@ -189,6 +190,7 @@ export function resolveTeam(teams: TeamRow[], query: string): ResolvedTeam {
 export interface CardsCoverage {
   statsCount: number;
   required: number;
+  note?: string;
 }
 
 export interface Prediction {
@@ -229,11 +231,13 @@ export async function predictMatch(
   const { lambda, mu } = predictExpectedGoals(params, home.id, away.id);
 
   // Cards are best-effort: coverage below the threshold (or teams missing
-  // from the cards window) yields cards: null, never an error.
-  const statsCount = await countCardStats(db, league);
+  // from the cards window) yields cards: null, never an error. API-Football
+  // leagues have no bookings source at all — cards stays null with a note.
+  const cardsUnsupported = LEAGUES[league]?.provider === "apifootball";
+  const statsCount = cardsUnsupported ? 0 : await countCardStats(db, league);
   let cards: CardsMarkets | null = null;
   let cardsModel: ModelMeta | null = null;
-  if (statsCount >= MIN_STATS_TO_FIT) {
+  if (!cardsUnsupported && statsCount >= MIN_STATS_TO_FIT) {
     try {
       const cardsFit = await getOrFitCards(db, league);
       if (cardsFit.params.teamIds.includes(home.id) && cardsFit.params.teamIds.includes(away.id)) {
@@ -257,7 +261,11 @@ export async function predictMatch(
     model: meta,
     cards,
     cardsModel,
-    cardsCoverage: { statsCount, required: MIN_STATS_TO_FIT },
+    cardsCoverage: {
+      statsCount,
+      required: MIN_STATS_TO_FIT,
+      ...(cardsUnsupported ? { note: "cards pipeline is fdorg-only; this league syncs via API-Football" } : {}),
+    },
   };
 }
 

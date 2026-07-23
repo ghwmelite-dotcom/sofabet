@@ -32,6 +32,24 @@ yellow-cards model, team ratings, and walk-forward backtests.
   competition may also be unavailable. Failed season fetches are logged and
   skipped.
 
+## Match-data providers
+
+| Provider | Leagues | Notes |
+|---|---|---|
+| football-data.org (`fdorg`) | PL, ELC, BL1, SA, PD, FL1, DED, PPL, BSA | Free tier 10 req/min; bookings (cards) endpoint |
+| API-Football (`apifootball`, api-sports.io) | SWE (113), DEN (119), NOR (103), FIN (244) | Free tier **100 requests/day**, guarded locally at 95 via a D1 daily counter (`af_calls_<utc-date>`); 1s call spacing; league ids are namespaced (+9e9) so they can never collide with fdorg ids |
+
+The Nordic leagues play summer calendars (roughly March–November), so they
+fill the European off-season alongside BSA. Cards/stats stay fdorg-only:
+`/api/sync-stats` rejects apifootball leagues, and `/api/predict` returns
+`cards: null` with a coverage note for them.
+
+Setup for API-Football: register free at
+[dashboard.api-football.com](https://dashboard.api-football.com/register),
+then `npx wrangler secret put API_FOOTBALL_KEY` and
+`POST /api/sync?league=SWE&seasons=3` (calendar-year seasons: 2026, 2025,
+2024). Exceeding the daily guard returns 429 until the UTC day rolls over.
+
 ## Setup (production)
 
 ```bash

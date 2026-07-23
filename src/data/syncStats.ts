@@ -25,8 +25,20 @@ export interface StatsSyncResult {
 }
 
 /**
+ * Filter a scope's leagues down to those the bookings pipeline can serve
+ * (fdorg only — API-Football fixtures have no bookings on the fdorg
+ * match-detail endpoint). Returns both lists for logging.
+ */
+export function statsEligibleLeagues(keys: string[]): { eligible: string[]; skipped: string[] } {
+  const skipped = keys.filter((k) => LEAGUES[k] && LEAGUES[k].provider !== "fdorg");
+  const eligible = keys.filter((k) => !LEAGUES[k] || LEAGUES[k].provider === "fdorg");
+  return { eligible, skipped };
+}
+
+/**
  * Sync up to `limit` matches' bookings. `scope` is a league key or 'all'
- * ('all' covers the registry leagues, newest matches first across them).
+ * ('all' covers the fdorg registry leagues, newest matches first across
+ * them — API-Football leagues have no bookings source and are skipped).
  */
 export async function syncStatsBatch(
   db: D1Database,
@@ -34,7 +46,13 @@ export async function syncStatsBatch(
   scope: string,
   limit: number,
 ): Promise<StatsSyncResult> {
-  const leagues = scope === "all" ? Object.keys(LEAGUES) : [scope];
+  const requested = scope === "all" ? Object.keys(LEAGUES) : [scope];
+  const { eligible: leagues, skipped } = statsEligibleLeagues(requested);
+  if (skipped.length > 0) {
+    console.log(
+      JSON.stringify({ message: "stats sync skips non-fdorg leagues (no bookings source)", leagues: skipped }),
+    );
+  }
   const pendingBefore = await countPendingStats(db, leagues);
   if (pendingBefore === 0 || limit <= 0) {
     return { scope, stored: 0, failed: 0, remaining: pendingBefore, rateLimited: false };

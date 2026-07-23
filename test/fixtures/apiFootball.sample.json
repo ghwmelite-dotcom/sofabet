@@ -1,0 +1,56 @@
+{
+  "paging": { "current": 1, "total": 1 },
+  "response": [
+    {
+      "fixture": {
+        "id": 1208331,
+        "date": "2026-07-19T17:00:00+00:00",
+        "status": { "long": "Match Finished", "short": "FT", "elapsed": 90 }
+      },
+      "league": { "id": 113, "name": "Allsvenskan", "country": "Sweden", "season": 2026, "round": "Regular Season - 14" },
+      "teams": {
+        "home": { "id": 956, "name": "Hammarby FF" },
+        "away": { "id": 454, "name": "Malmö FF" }
+      },
+      "goals": { "home": 3, "away": 1 },
+      "score": {
+        "halftime": { "home": 2, "away": 0 },
+        "fulltime": { "home": 3, "away": 1 }
+      }
+    },
+    {
+      "fixture": {
+        "id": 1208345,
+        "date": "2026-07-26T15:30:00+00:00",
+        "status": { "long": "Not Started", "short": "NS", "elapsed": null }
+      },
+      "league": { "id": 113, "name": "Allsvenskan", "country": "Sweden", "season": 2026, "round": "Regular Season - 15" },
+      "teams": {
+        "home": { "id": 363, "name": "AIK Fotboll" },
+        "away": { "id": 512, "name": "Djurgårdens IF" }
+      },
+      "goals": { "home": null, "away": null },
+      "score": {
+        "halftime": { "home": null, "away": null },
+        "fulltime": { "home": null, "away": null }
+      }
+    },
+    {
+      "fixture": {
+        "id": 1208346,
+        "date": "2026-07-26T17:30:00+00:00",
+        "status": { "long": "First Half", "short": "1H", "elapsed": 23 }
+      },
+      "league": { "id": 113, "name": "Allsvenskan", "country": "Sweden", "season": 2026, "round": "Regular Season - 15" },
+      "teams": {
+        "home": { "id": 216, "name": "IF Elfsborg" },
+        "away": { "id": 221, "name": "BK Häcken" }
+      },
+      "goals": { "home": 1, "away": 0 },
+      "score": {
+        "halftime": { "home": null, "away": null },
+        "fulltime": { "home": null, "away": null }
+      }
+    }
+  ]
+}

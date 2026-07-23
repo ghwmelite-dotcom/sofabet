@@ -130,6 +130,32 @@ export class OddsApiError extends FootballDataError {
   }
 }
 
+/** API-Football (api-sports.io) rejected the key (401/403). */
+export class ApiFootballRestrictedError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiFootballRestrictedError";
+    this.status = status;
+  }
+}
+
+/** API-Football upstream failure; routes map it like other upstream errors. */
+export class ApiFootballError extends FootballDataError {
+  constructor(message: string, status: number, retryAfterSeconds?: number) {
+    super(message, status, retryAfterSeconds);
+    this.name = "ApiFootballError";
+  }
+}
+
+/** API-Football daily quota guard tripped (free tier is 100 requests/day). */
+export class QuotaExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QuotaExceededError";
+  }
+}
+
 /** Row of odds_snapshots joined to its match (with team names). */
 export interface OddsSnapshotRow {
   id: number;

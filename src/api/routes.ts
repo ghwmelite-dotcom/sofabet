@@ -110,21 +110,17 @@ async function handleSync(url: URL, env: Env, request: Request): Promise<Respons
   requireSyncKey(env, request);
   const league = requireLeagueParam(url);
   const seasons = parseSeasons(url);
-  const token = env.FOOTBALL_DATA_TOKEN;
-  if (!token) {
-    throw new HttpError(500, "FOOTBALL_DATA_TOKEN secret is not configured");
-  }
   if (league === "ALL") {
     // Synchronous by design: ctx.waitUntil() work after a response is cut off
     // after ~30s, which silently killed the throttled loop mid-sync. Held open,
     // the request survives the ~2-3 min the throttled loop needs (I/O-bound).
-    const results = await syncAllLeagues(env.DB, token, seasons);
+    // Mixed providers: each league's key is checked in its own branch.
+    const results = await syncAllLeagues(env.DB, env, seasons);
     const okCount = results.filter((r) => r.ok).length;
     return json({ ok: okCount === results.length, synced: okCount, failed: results.length - okCount, seasons, results });
   }
   requireRegisteredLeague(league);
-  const client = new FootballDataClient(token);
-  const result = await syncLeague(env.DB, client, league, seasons);
+  const result = await syncLeague(env.DB, env, league, seasons);
   return json(result);
 }
 
@@ -133,16 +129,23 @@ async function handleSync(url: URL, env: Env, request: Request): Promise<Respons
  * Backfills bookings for up to `limit` FINISHED matches (throttled; ~6.5s per
  * match). 429 upstream stops the batch gracefully and returns partial counts;
  * a tier-restricted detail endpoint returns 403 with restricted: true.
+ * fdorg leagues only — API-Football fixtures have no bookings on the fdorg
+ * match-detail endpoint.
  */
 async function handleSyncStats(url: URL, env: Env, request: Request): Promise<Response> {
   requireSyncKey(env, request);
   const league = requireLeagueParam(url);
   const limit = parseLimit(url);
+  if (league !== "ALL") {
+    requireRegisteredLeague(league);
+    if (LEAGUES[league].provider !== "fdorg") {
+      throw new HttpError(400, `stats pipeline is fdorg-only; ${league} syncs via API-Football (no bookings source)`);
+    }
+  }
   const token = env.FOOTBALL_DATA_TOKEN;
   if (!token) {
     throw new HttpError(500, "FOOTBALL_DATA_TOKEN secret is not configured");
   }
-  if (league !== "ALL") requireRegisteredLeague(league);
   const scope = league === "ALL" ? "all" : league;
   const client = new FootballDataClient(token);
   try {

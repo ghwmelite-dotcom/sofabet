@@ -1,13 +1,16 @@
 /**
- * League sync orchestration: fetch one league / all leagues from
- * football-data.org and upsert into D1. Sequential with client-side
- * throttling (6.5s between calls; free tier is 10 requests/minute).
+ * League sync orchestration: fetch one league / all leagues and upsert into
+ * D1. Provider per league (cfg.provider): football-data.org (6.5s throttle,
+ * 10 req/min free tier) or API-Football (1s gap, 100/day quota guarded by the
+ * client). Sequential across providers.
  */
 
 import { LEAGUES } from "../config";
+import { ApiFootballClient, afCallsUtcKey, apiFootballSeasons } from "./apiFootball";
+import type { AfQuotaStore } from "./apiFootball";
 import { FootballDataClient } from "./footballData";
-import { getTeamIdMap, upsertMatches, upsertTeams } from "./repo";
-import { FootballDataError } from "../types";
+import { getMeta, getTeamIdMap, setMeta, upsertMatches, upsertTeams } from "./repo";
+import { FootballDataError, HttpError } from "../types";
 import type { IngestedMatch } from "../types";
 
 export interface SeasonSyncResult {
@@ -19,9 +22,11 @@ export interface SeasonSyncResult {
 export interface LeagueSyncResult {
   league: string;
   ok: boolean;
+  provider?: string;
   teams?: number;
   seasons?: SeasonSyncResult[];
   apiCalls?: number;
+  quotaWarning?: boolean;
   error?: string;
 }
 
@@ -47,29 +52,33 @@ async function storeSeason(
   return { teams: teamCount, result: { season, matches: upserted, skipped } };
 }
 
-/**
- * Sync one league. `seasons` = how many seasons to fetch including the
- * current one (e.g. 2 = current + previous), for backtest depth.
- */
-export async function syncLeague(
-  db: D1Database,
-  client: FootballDataClient,
-  leagueKey: string,
-  seasons: number,
-): Promise<LeagueSyncResult> {
-  const cfg = LEAGUES[leagueKey];
-  if (!cfg) {
-    throw new Error(`unknown league '${leagueKey}'`);
-  }
+/** D1 meta-backed daily quota store for the API-Football client. */
+export function afQuotaStore(db: D1Database): AfQuotaStore {
+  const key = afCallsUtcKey(new Date());
+  return {
+    async get() {
+      const raw = await getMeta(db, key);
+      return raw !== null ? Number(raw) : 0;
+    },
+    async incr() {
+      const raw = await getMeta(db, key);
+      const next = (raw !== null ? Number(raw) : 0) + 1;
+      await setMeta(db, key, String(next));
+      return next;
+    },
+  };
+}
+
+async function syncLeagueFdorg(db: D1Database, client: FootballDataClient, leagueKey: string, seasons: number, fdOrgCode: string): Promise<LeagueSyncResult> {
   const seasonResults: SeasonSyncResult[] = [];
   let apiCalls = 0;
   let teamTotal = 0;
 
   // Current season first: its response tells us the current season start year.
-  const current = await client.getCompetitionMatches(cfg.fdOrgCode);
+  const current = await client.getCompetitionMatches(fdOrgCode);
   apiCalls++;
   if (current.length === 0) {
-    return { league: leagueKey, ok: true, teams: 0, seasons: [], apiCalls };
+    return { league: leagueKey, ok: true, provider: "fdorg", teams: 0, seasons: [], apiCalls };
   }
   const storedCurrent = await storeSeason(db, leagueKey, current);
   teamTotal = Math.max(teamTotal, storedCurrent.teams);
@@ -80,7 +89,7 @@ export async function syncLeague(
   for (let k = 1; k < seasons; k++) {
     const year = currentYear - k;
     try {
-      const past = await client.getCompetitionMatches(cfg.fdOrgCode, year);
+      const past = await client.getCompetitionMatches(fdOrgCode, year);
       apiCalls++;
       if (past.length === 0) continue;
       const stored = await storeSeason(db, leagueKey, past);
@@ -93,25 +102,73 @@ export async function syncLeague(
     }
   }
 
-  return { league: leagueKey, ok: true, teams: teamTotal, seasons: seasonResults, apiCalls };
+  return { league: leagueKey, ok: true, provider: "fdorg", teams: teamTotal, seasons: seasonResults, apiCalls };
 }
 
-/** Sync every league in the registry, sequentially (rate limit friendly). */
-export async function syncAllLeagues(
+async function syncLeagueApiFootball(db: D1Database, client: ApiFootballClient, leagueKey: string, seasons: number, apiFootballId: number): Promise<LeagueSyncResult> {
+  const seasonResults: SeasonSyncResult[] = [];
+  let apiCalls = 0;
+  let teamTotal = 0;
+  for (const season of apiFootballSeasons(seasons)) {
+    const fixtures = await client.getLeagueFixtures(apiFootballId, season);
+    apiCalls++;
+    if (fixtures.length === 0) continue;
+    const stored = await storeSeason(db, leagueKey, fixtures);
+    teamTotal = Math.max(teamTotal, stored.teams);
+    seasonResults.push({ season: String(season), matches: stored.result.matches, skipped: stored.result.skipped });
+  }
+  return {
+    league: leagueKey,
+    ok: true,
+    provider: "apifootball",
+    teams: teamTotal,
+    seasons: seasonResults,
+    apiCalls,
+    quotaWarning: client.quotaWarning,
+  };
+}
+
+/**
+ * Sync one league. `seasons` = how many seasons to fetch including the
+ * current one (calendar-year seasons for API-Football leagues).
+ */
+export async function syncLeague(
   db: D1Database,
-  token: string,
+  env: Env,
+  leagueKey: string,
   seasons: number,
-): Promise<LeagueSyncResult[]> {
-  const client = new FootballDataClient(token);
+  clients?: { fdorg?: FootballDataClient; apifootball?: ApiFootballClient },
+): Promise<LeagueSyncResult> {
+  const cfg = LEAGUES[leagueKey];
+  if (!cfg) {
+    throw new Error(`unknown league '${leagueKey}'`);
+  }
+  if (cfg.provider === "apifootball") {
+    const apiKey = env.API_FOOTBALL_KEY;
+    if (!apiKey) throw new HttpError(500, "API_FOOTBALL_KEY secret is not configured");
+    const client = clients?.apifootball ?? new ApiFootballClient(apiKey, afQuotaStore(db));
+    return syncLeagueApiFootball(db, client, leagueKey, seasons, cfg.apiFootballId as number);
+  }
+  const token = env.FOOTBALL_DATA_TOKEN;
+  if (!token) throw new HttpError(500, "FOOTBALL_DATA_TOKEN secret is not configured");
+  const client = clients?.fdorg ?? new FootballDataClient(token);
+  return syncLeagueFdorg(db, client, leagueKey, seasons, cfg.fdOrgCode);
+}
+
+/** Sync every league in the registry, sequentially, sharing one client per provider. */
+export async function syncAllLeagues(db: D1Database, env: Env, seasons: number): Promise<LeagueSyncResult[]> {
+  const clients: { fdorg?: FootballDataClient; apifootball?: ApiFootballClient } = {};
+  if (env.FOOTBALL_DATA_TOKEN) clients.fdorg = new FootballDataClient(env.FOOTBALL_DATA_TOKEN);
+  if (env.API_FOOTBALL_KEY) clients.apifootball = new ApiFootballClient(env.API_FOOTBALL_KEY, afQuotaStore(db));
   const results: LeagueSyncResult[] = [];
   for (const key of Object.keys(LEAGUES)) {
     try {
-      results.push(await syncLeague(db, client, key, seasons));
-      console.log(JSON.stringify({ message: "league synced", league: key, seasons }));
+      results.push(await syncLeague(db, env, key, seasons, clients));
+      console.log(JSON.stringify({ message: "league synced", league: key, provider: LEAGUES[key].provider, seasons }));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      console.error(JSON.stringify({ message: "league sync failed", league: key, error: message }));
-      results.push({ league: key, ok: false, error: message });
+      console.error(JSON.stringify({ message: "league sync failed", league: key, provider: LEAGUES[key].provider, error: message }));
+      results.push({ league: key, ok: false, provider: LEAGUES[key].provider, error: message });
     }
   }
   return results;

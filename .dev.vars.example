@@ -9,3 +9,7 @@ SYNC_KEY=any-long-random-string
 # finder). Free tier is 500 requests/month. Leave as replace-me to keep the
 # odds endpoints disabled locally. https://the-odds-api.com/liveapi/guides/v4/
 ODDS_API_KEY=replace-me
+# Optional: API-Football (api-sports.io) key for the Nordic leagues
+# (SWE/DEN/NOR/FIN). Free tier is 100 requests/day; the app guards at 95.
+# Register at https://dashboard.api-football.com/register
+API_FOOTBALL_KEY=replace-me

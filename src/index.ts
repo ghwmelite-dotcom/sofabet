@@ -22,13 +22,15 @@ async function runDaily(env: Env, cron: string): Promise<void> {
   const startedAt = new Date().toISOString();
   console.log(JSON.stringify({ message: "daily job started", cron, startedAt }));
 
-  const token = env.FOOTBALL_DATA_TOKEN;
-  if (token) {
-    const results = await syncAllLeagues(env.DB, token, 1);
+  const hasMatchDataKey = env.FOOTBALL_DATA_TOKEN || env.API_FOOTBALL_KEY;
+  if (hasMatchDataKey) {
+    // Mixed providers: fdorg leagues need FOOTBALL_DATA_TOKEN, Nordic leagues
+    // need API_FOOTBALL_KEY; a missing key fails that league only.
+    const results = await syncAllLeagues(env.DB, env, 1);
     const okCount = results.filter((r) => r.ok).length;
     console.log(JSON.stringify({ message: "daily sync done", ok: okCount, failed: results.length - okCount }));
   } else {
-    console.error(JSON.stringify({ message: "FOOTBALL_DATA_TOKEN not set; skipping sync, refit only" }));
+    console.error(JSON.stringify({ message: "no match-data API keys set; skipping sync, refit only" }));
   }
 
   for (const league of Object.keys(LEAGUES)) {
