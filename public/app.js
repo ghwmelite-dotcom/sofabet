@@ -346,6 +346,7 @@ async function logLegBet(leg, stake, msgEl) {
     location.hash = "#/bets"; // key prompt lives on the bets screen
     return;
   }
+  const betMarket = { h2h: "1X2", doubleChance: "doubleChance", totals: "overUnder", btts: "btts" }[leg.market] ?? leg.market;
   await api("/api/bets", {
     auth: true,
     method: "POST",
@@ -353,15 +354,35 @@ async function logLegBet(leg, stake, msgEl) {
       league: leg.league,
       matchId: leg.matchId,
       matchLabel: `${leg.homeTeam} vs ${leg.awayTeam}`,
-      bookmaker: "other",
-      market: leg.market === "h2h" ? "1X2" : "overUnder",
+      bookmaker: leg.priceKind === "model" ? "model" : leg.priceKind === "derived" ? "derived" : "other",
+      market: betMarket,
       selection: leg.selection,
       line: leg.line ?? undefined,
-      odds: leg.bestOdds,
+      odds: leg.price ?? leg.bestOdds,
       stake,
     },
   });
   msgEl.textContent = "logged ✓";
+}
+
+/** Short label for an acca v2 leg: "1X2 · home", "1X", "O 2.5", "BTTS yes". */
+function accaLegLabel(leg) {
+  if (leg.market === "h2h") return `1X2 · ${leg.selection}`;
+  if (leg.market === "doubleChance") return leg.selection;
+  if (leg.market === "totals") return `${leg.selection === "over" ? "O" : "U"} ${leg.line}`;
+  if (leg.market === "btts") return `BTTS ${leg.selection}`;
+  return `${leg.market} · ${leg.selection}`;
+}
+
+/** Price display by tier: market = amber, derived = amber + superscript d, model = muted ~. */
+function priceEl(leg) {
+  if (leg.priceKind === "model") {
+    return el("span", { class: "num muted", title: "model fair price — no bookmaker price available", text: `~${num(leg.price)}` });
+  }
+  const span = el("span", { class: "num", style: "color:var(--amber)", title: leg.priceKind === "derived" ? "derived from consensus 1X2 (estimate)" : "best market price" });
+  span.append(num(leg.price));
+  if (leg.priceKind === "derived") span.append(el("sup", { class: "small", text: "d" }));
+  return span;
 }
 
 function legRow(leg) {
@@ -369,9 +390,9 @@ function legRow(leg) {
     crest(leg.homeTeam, 20),
     crest(leg.awayTeam, 20),
     el("span", { class: "name", text: `${leg.homeTeam} v ${leg.awayTeam}` }),
-    el("span", { class: "small muted", text: `${marketLabel(leg.market, leg.line)} · ${leg.selection}` }),
+    el("span", { class: "small muted", text: accaLegLabel(leg) }),
     pcell(pct0(leg.modelProb), leg.modelProb, leg.market === "h2h" ? 0.33 : 0.5),
-    el("span", { class: "num", style: "color:var(--amber)", text: num(leg.bestOdds) }),
+    priceEl(leg),
   ]);
 }
 
@@ -390,6 +411,7 @@ function accaCard(acca) {
       logBtn.disabled = false;
     }
   });
+  const allPriced = acca.modelLegs === 0;
   return el("div", { class: "card acca-hero" }, [
     el("div", { class: "row-between" }, [
       el("h3", { class: "section-title", text: "Today's ACCA" }),
@@ -403,10 +425,15 @@ function accaCard(acca) {
       ]),
       el("span", { class: "strip-chance", text: `Model chance ${pct0(acca.combinedProb)}` }),
       el("span", { style: "flex:1" }),
-      el("span", { class: "ev-pill", text: `${acca.evPct >= 0 ? "+" : ""}${(acca.evPct * 100).toFixed(1)}% EV` }),
+      allPriced && acca.evPct !== null
+        ? el("span", { class: "ev-pill", text: `${acca.evPct >= 0 ? "+" : ""}${(acca.evPct * 100).toFixed(1)}% EV` })
+        : el("span", { class: "small", style: "font-style:italic", text: `${acca.modelLegs} leg${acca.modelLegs === 1 ? "" : "s"} unpriced` }),
       logBtn,
     ]),
-    el("div", { class: "meta-row" }, [el("span", { class: "note", style: "font-size:11px", text: "Accas multiply variance — combined chance drops with every leg." }), msg]),
+    el("div", { class: "meta-row" }, [
+      el("span", { class: "note", style: "font-size:11px", text: "Highest-probability outcome per match across 1X2, double chance, totals and BTTS. ~ = model fair price, no market price." }),
+      msg,
+    ]),
   ]);
 }
 

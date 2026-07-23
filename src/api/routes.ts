@@ -18,6 +18,7 @@ import {
   getScheduledMatches,
   getStatsCoverage,
   getTeams,
+  getUpcomingFixturesAll,
   getUpcomingOddsSnapshots,
 } from "../data/repo";
 import { syncAllLeagues, syncLeague } from "../data/sync";
@@ -25,9 +26,10 @@ import { syncOddsLeague } from "../data/syncOdds";
 import { OddsApiClient } from "../data/oddsApi";
 import { syncStatsBatch } from "../data/syncStats";
 import { InsufficientDataError } from "../model/backtest";
-import { buildTodayAcca, buildWeeklyRollover } from "../model/acca";
-import type { AccaCandidate } from "../model/acca";
+import { buildTodayAccaV2, buildWeeklyRollover, legMenu, pickBestLeg } from "../model/acca";
+import type { AccaCandidate, MatchMeta, MatchSnapshot, MenuLeg, SnapOutcome } from "../model/acca";
 import { predictScoreGrid } from "../model/dixonColes";
+import type { FittedParams } from "../model/dixonColes";
 import { computeTeamForm } from "../model/form";
 import { gradePrediction, summarizeGrades } from "../model/grade";
 import { gridToMarkets } from "../model/markets";
@@ -430,17 +432,67 @@ async function handleSnapshot(url: URL, env: Env, request: Request): Promise<Res
 }
 
 /**
- * GET /api/acca — Today's ACCA + Weekly Rollover from the latest value
- * snapshots across all registry leagues (read-only, no upstream calls).
+ * GET /api/acca — Today's ACCA v2 (highest-probability leg per match across
+ * 1X2/DC/totals/BTTS with market/derived/model pricing tiers) + Weekly
+ * Rollover (snapshot-based, unchanged). Read-only, no upstream calls.
  */
 async function handleAcca(env: Env): Promise<Response> {
-  const nowIso = new Date().toISOString();
-  const untilIso = new Date(Date.now() + 7 * 86_400_000).toISOString();
-  const rows = await getUpcomingOddsSnapshots(env.DB, Object.keys(LEAGUES), nowIso, untilIso);
-  const candidates: AccaCandidate[] = latestPerCombo(rows).filter((r) => isValueRow(r));
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const dayIso = new Date(now + 86_400_000).toISOString();
+  const weekIso = new Date(now + 7 * 86_400_000).toISOString();
+  const registryLeagues = Object.keys(LEAGUES);
+
+  // Rollover: latest value snapshots over the week (unchanged behavior).
+  const snapRows = await getUpcomingOddsSnapshots(env.DB, registryLeagues, nowIso, weekIso);
+  const candidates: AccaCandidate[] = latestPerCombo(snapRows).filter((r) => isValueRow(r));
+
+  // ACCA v2: fixtures in the next 24h with fitted params; per-match leg menu.
+  const fixtures = await getUpcomingFixturesAll(env.DB, registryLeagues, nowIso, dayIso);
+  // Latest snapshot per (match, market, selection, line) in the same window,
+  // grouped per match for pricing (nullable — model legs work without it).
+  const snapsByMatch = new Map<number, MatchSnapshot>();
+  for (const r of latestPerCombo(await getUpcomingOddsSnapshots(env.DB, registryLeagues, nowIso, dayIso))) {
+    let snap = snapsByMatch.get(r.match_id);
+    if (!snap) {
+      snap = { h2h: {}, totals: new Map<string, SnapOutcome>() };
+      snapsByMatch.set(r.match_id, snap);
+    }
+    const outcome: SnapOutcome = { best: r.best_odds, consensus: r.consensus_odds, bookmakers: r.bookmakers };
+    if (r.market === "h2h") {
+      if (r.selection === "home" || r.selection === "draw" || r.selection === "away") snap.h2h[r.selection] = outcome;
+    } else if (r.market === "totals") {
+      snap.totals.set(`${r.selection}|${r.line}`, outcome);
+    }
+  }
+
+  const paramsByLeague = new Map<string, FittedParams | null>();
+  const picked: { match: MatchMeta; leg: MenuLeg }[] = [];
+  for (const f of fixtures) {
+    if (!paramsByLeague.has(f.league)) {
+      try {
+        paramsByLeague.set(f.league, (await getOrFitParams(env.DB, f.league)).params);
+      } catch (e) {
+        console.warn(JSON.stringify({ message: "acca: league params unavailable", league: f.league, error: e instanceof Error ? e.message : String(e) }));
+        paramsByLeague.set(f.league, null);
+      }
+    }
+    const params = paramsByLeague.get(f.league);
+    if (!params) continue;
+    if (!params.teamIds.includes(f.home_team_id) || !params.teamIds.includes(f.away_team_id)) continue;
+    const gridMarkets = gridToMarkets(predictScoreGrid(params, f.home_team_id, f.away_team_id));
+    const leg = pickBestLeg(legMenu(gridMarkets, snapsByMatch.get(f.id) ?? null));
+    if (leg) {
+      picked.push({
+        match: { matchId: f.id, league: f.league, utcDate: f.utc_date, homeTeam: f.home_name, awayTeam: f.away_name },
+        leg,
+      });
+    }
+  }
+
   return json({
     generatedAt: nowIso,
-    acca: buildTodayAcca(candidates, nowIso),
+    acca: buildTodayAccaV2(picked),
     rollover: buildWeeklyRollover(candidates, nowIso),
   });
 }

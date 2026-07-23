@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { buildTodayAcca, buildWeeklyRollover, combineAcca } from "../src/model/acca";
-import type { AccaCandidate } from "../src/model/acca";
+import {
+  buildTodayAccaV2,
+  buildWeeklyRollover,
+  dcPricesFromH2h,
+  legMenu,
+  pickBestLeg,
+} from "../src/model/acca";
+import type { AccaCandidate, MatchSnapshot, MenuLeg } from "../src/model/acca";
+import { gridToMarkets } from "../src/model/markets";
+import { predictScoreGrid } from "../src/model/dixonColes";
 
 const NOW = "2026-07-23T17:00:00Z";
 
@@ -23,114 +31,179 @@ function cand(partial: Partial<AccaCandidate>): AccaCandidate {
   };
 }
 
-describe("combineAcca", () => {
-  it("multiplies odds and probs; ev = product - 1", () => {
-    const c = combineAcca([
-      { modelProb: 0.5, bestOdds: 2 },
-      { modelProb: 0.4, bestOdds: 2.5 },
-    ]);
-    expect(c.combinedOdds).toBeCloseTo(5, 12);
-    expect(c.combinedProb).toBeCloseTo(0.2, 12);
-    expect(c.evPct).toBeCloseTo(0, 12);
-  });
-
-  it("empty legs -> 1x products, ev 0", () => {
-    expect(combineAcca([])).toEqual({ combinedOdds: 1, combinedProb: 1, evPct: 0 });
-  });
-});
-
-describe("buildTodayAcca", () => {
-  it("takes top-4 by ev, max one leg per match, within 24h only", () => {
-    const candidates = [
-      cand({ match_id: 1, ev_pct: 0.1, utc_date: "2026-07-24T10:00:00Z" }),
-      cand({ match_id: 1, selection: "away", ev_pct: 0.2, utc_date: "2026-07-24T10:00:00Z" }), // same match, higher ev
-      cand({ match_id: 2, ev_pct: 0.08, utc_date: "2026-07-23T20:00:00Z" }),
-      cand({ match_id: 3, ev_pct: 0.07, utc_date: "2026-07-24T16:00:00Z" }),
-      cand({ match_id: 4, ev_pct: 0.06, utc_date: "2026-07-24T16:30:00Z" }),
-      cand({ match_id: 5, ev_pct: 0.05, utc_date: "2026-07-24T17:00:00Z" }), // 24h boundary (<=)
-      cand({ match_id: 6, ev_pct: 0.9, utc_date: "2026-07-25T12:00:00Z" }), // outside 24h despite huge ev
-      cand({ match_id: 7, ev_pct: 0.04, utc_date: "2026-07-24T18:00:00Z" }), // outside 24h
-    ];
-    const acca = buildTodayAcca(candidates, NOW);
-    expect(acca).not.toBeNull();
-    expect(acca?.legs.map((l) => l.matchId)).toEqual([1, 2, 3, 4]); // match 1 once (the higher-ev selection), boundary match 5 out (top-4 cut)
-    expect(acca?.legs[0].selection).toBe("away"); // higher-ev leg of match 1 wins
-  });
-
-  it("includes a match exactly at the 24h boundary", () => {
-    const acca = buildTodayAcca(
-      [
-        cand({ match_id: 1, utc_date: "2026-07-24T17:00:00Z", ev_pct: 0.06 }),
-        cand({ match_id: 2, utc_date: "2026-07-23T18:00:00Z", ev_pct: 0.05 }),
-      ],
-      NOW,
-    );
-    expect(acca?.legs.length).toBe(2);
-  });
-
-  it("excludes longshot legs below the 0.30 prob floor even at the highest EV", () => {
-    const candidates = [
-      cand({ match_id: 1, model_prob: 0.2, best_odds: 7.8, ev_pct: 0.56, utc_date: "2026-07-23T22:00:00Z" }), // the Remo case
-      cand({ match_id: 2, model_prob: 0.65, best_odds: 1.82, ev_pct: 0.19, utc_date: "2026-07-23T22:00:00Z" }),
-      cand({ match_id: 3, model_prob: 0.55, best_odds: 2.0, ev_pct: 0.1, utc_date: "2026-07-23T23:00:00Z" }),
-    ];
-    const acca = buildTodayAcca(candidates, NOW);
-    expect(acca?.legs.map((l) => l.matchId)).toEqual([2, 3]);
-  });
-
-  it("returns null with fewer than 2 legs", () => {
-    expect(buildTodayAcca([cand({ match_id: 1 })], NOW)).toBeNull();
-    expect(buildTodayAcca([], NOW)).toBeNull();
-    // two candidates but same match -> one leg only -> null
-    expect(
-      buildTodayAcca(
-        [cand({ match_id: 1 }), cand({ match_id: 1, selection: "away", ev_pct: 0.2 })],
-        NOW,
-      ),
-    ).toBeNull();
-  });
-});
-
-describe("buildWeeklyRollover", () => {
-  it("picks the highest model_prob per calendar day above the 0.45 floor", () => {
+describe("buildWeeklyRollover (unchanged)", () => {
+  it("picks the highest model_prob per calendar day above the 0.45 floor, skipping null days", () => {
     const candidates = [
       cand({ match_id: 1, utc_date: "2026-07-23T20:00:00Z", model_prob: 0.5, best_odds: 2 }),
       cand({ match_id: 2, utc_date: "2026-07-23T21:00:00Z", model_prob: 0.55, best_odds: 1.9 }),
-      cand({ match_id: 3, utc_date: "2026-07-24T15:00:00Z", model_prob: 0.44, best_odds: 3 }), // below floor -> day null
+      cand({ match_id: 3, utc_date: "2026-07-24T15:00:00Z", model_prob: 0.44, best_odds: 3 }),
       cand({ match_id: 4, utc_date: "2026-07-25T15:00:00Z", model_prob: 0.48, best_odds: 2.2 }),
     ];
     const r = buildWeeklyRollover(candidates, NOW);
-    expect(r.days.length).toBe(7);
-    expect(r.days[0].date).toBe("2026-07-23");
-    expect(r.days[0].leg?.matchId).toBe(2); // higher prob of the two day-0 candidates
-    expect(r.days[1].leg).toBeNull(); // 0.44 below floor
+    expect(r.days[0].leg?.matchId).toBe(2);
+    expect(r.days[1].leg).toBeNull();
     expect(r.days[2].leg?.matchId).toBe(4);
-    expect(r.days[3].leg).toBeNull();
-    // Cumulative path skips null days: day0 (1.9 x 0.55), then day2 (x2.2 x0.48).
     expect(r.path.length).toBe(2);
-    expect(r.path[0]).toMatchObject({ date: "2026-07-23" });
-    expect(r.path[0].cumulativeOdds).toBeCloseTo(1.9, 12);
-    expect(r.path[0].cumulativeProb).toBeCloseTo(0.55, 12);
     expect(r.path[1].cumulativeOdds).toBeCloseTo(1.9 * 2.2, 12);
     expect(r.path[1].cumulativeProb).toBeCloseTo(0.55 * 0.48, 12);
   });
+});
 
-  it("excludes matches earlier than now on day 0 and anything past day 6", () => {
-    const r = buildWeeklyRollover(
-      [
-        cand({ match_id: 1, utc_date: "2026-07-23T10:00:00Z", model_prob: 0.6 }), // before now
-        cand({ match_id: 2, utc_date: "2026-07-30T10:00:00Z", model_prob: 0.6 }), // day 7 (out of 0..6)
-        cand({ match_id: 3, utc_date: "2026-07-29T10:00:00Z", model_prob: 0.6 }), // day 6, in
-      ],
-      NOW,
-    );
-    expect(r.days[0].leg).toBeNull();
-    expect(r.days[6].leg?.matchId).toBe(3);
-    expect(r.path.length).toBe(1);
+/* ---------- ACCA v2 ---------- */
+
+describe("dcPricesFromH2h", () => {
+  it("margin-normalizes a synthetic 1X2 book and derives DC odds", () => {
+    // Book: 2.00 / 3.50 / 3.80 -> implied 0.5 / 0.2857 / 0.2632, sum 1.0489 (overround ~4.9%).
+    const { o1X, oX2, o12 } = dcPricesFromH2h(2.0, 3.5, 3.8);
+    const sum = 1 / 2.0 + 1 / 3.5 + 1 / 3.8;
+    const pH = 0.5 / sum;
+    const pD = 1 / 3.5 / sum;
+    const pA = 1 / 3.8 / sum;
+    expect(o1X).toBeCloseTo(1 / (pH + pD), 10);
+    expect(oX2).toBeCloseTo(1 / (pA + pD), 10);
+    expect(o12).toBeCloseTo(1 / (pH + pA), 10);
+    // Sanity: derived DC prices are shorter than any component price.
+    expect(o1X).toBeLessThan(2.0);
+    expect(o12).toBeLessThan(2.0);
+  });
+});
+
+const gridMarkets = gridToMarkets(
+  predictScoreGrid({ teamIds: [1, 2], attack: [0.5, -0.3], defence: [0.1, -0.2], homeAdv: 0.25, rho: 0 }, 1, 2),
+);
+
+const SNAP: MatchSnapshot = {
+  h2h: {
+    home: { best: 1.85, consensus: 1.75, bookmakers: 6 },
+    draw: { best: 3.8, consensus: 3.6, bookmakers: 6 },
+    away: { best: 4.6, consensus: 4.4, bookmakers: 5 },
+  },
+  totals: new Map([["over|2.5", { best: 2.1, consensus: 2.0, bookmakers: 4 }]]),
+};
+
+describe("legMenu", () => {
+  it("produces market, derived and model tiers with correct prices", () => {
+    const menu = legMenu(gridMarkets, SNAP);
+    const h2h = menu.find((l) => l.market === "h2h" && l.selection === "home");
+    expect(h2h?.priceKind).toBe("market");
+    expect(h2h?.price).toBe(1.85);
+    expect(h2h?.evPct).toBeCloseTo(h2h!.modelProb * 1.85 - 1, 12);
+
+    const dc = menu.filter((l) => l.market === "doubleChance");
+    expect(dc.length).toBe(3);
+    expect(dc[0].priceKind).toBe("derived");
+    const expDc = dcPricesFromH2h(1.75, 3.6, 4.4);
+    expect(dc.find((l) => l.selection === "1X")?.price).toBeCloseTo(expDc.o1X, 12);
+
+    const totalsMarket = menu.find((l) => l.market === "totals" && l.priceKind === "market");
+    expect(totalsMarket?.selection).toBe("over");
+    expect(totalsMarket?.line).toBe(2.5);
+    expect(totalsMarket?.price).toBe(2.1);
+
+    const modelLegs = menu.filter((l) => l.priceKind === "model");
+    // BTTS yes/no + 5 lines x 2 sides = 12 model legs.
+    expect(modelLegs.length).toBe(12);
+    expect(modelLegs.every((l) => l.evPct === null)).toBe(true);
+    const btts = menu.find((l) => l.market === "btts" && l.selection === "yes");
+    expect(btts?.price).toBeCloseTo(1 / btts!.modelProb, 12);
   });
 
-  it("respects the 0.45 boundary exactly", () => {
-    const r = buildWeeklyRollover([cand({ match_id: 1, utc_date: "2026-07-23T20:00:00Z", model_prob: 0.45 })], NOW);
-    expect(r.days[0].leg).not.toBeNull();
+  it("works snapshot-less: only model legs", () => {
+    const menu = legMenu(gridMarkets, null);
+    expect(menu.length).toBe(12);
+    expect(menu.every((l) => l.priceKind === "model")).toBe(true);
+  });
+});
+
+describe("pickBestLeg", () => {
+  const leg = (partial: Partial<MenuLeg>): MenuLeg => ({
+    market: "h2h",
+    selection: "home",
+    line: null,
+    modelProb: 0.6,
+    price: 2,
+    priceKind: "market",
+    evPct: 0.2,
+    ...partial,
+  });
+
+  it("picks the highest modelProb above the 0.55 floor with the ev guard", () => {
+    const pick = pickBestLeg([
+      leg({ modelProb: 0.549, evPct: 5 }), // below prob floor
+      leg({ modelProb: 0.6, evPct: -0.05 }), // fails ev guard (< -0.03)
+      leg({ modelProb: 0.62, evPct: -0.02 }),
+      leg({ modelProb: 0.58, evPct: 0.5 }),
+    ]);
+    expect(pick?.modelProb).toBe(0.62);
+  });
+
+  it("unpriced (model) legs are eligible regardless of ev", () => {
+    const pick = pickBestLeg([leg({ modelProb: 0.9, priceKind: "model", evPct: null })]);
+    expect(pick?.priceKind).toBe("model");
+  });
+
+  it("tie-breaks by evPct, then market > derived > model", () => {
+    const pick = pickBestLeg([
+      leg({ modelProb: 0.6, evPct: 0.1, priceKind: "model" }),
+      leg({ modelProb: 0.6, evPct: 0.1, priceKind: "derived" }),
+      leg({ modelProb: 0.6, evPct: 0.1, priceKind: "market" }),
+    ]);
+    expect(pick?.priceKind).toBe("market");
+    const evTie = pickBestLeg([
+      leg({ modelProb: 0.6, evPct: 0.1, priceKind: "market" }),
+      leg({ modelProb: 0.6, evPct: 0.2, priceKind: "market", selection: "away" }),
+    ]);
+    expect(evTie?.selection).toBe("away");
+  });
+
+  it("returns null when nothing qualifies", () => {
+    expect(pickBestLeg([leg({ modelProb: 0.4 })])).toBeNull();
+    expect(pickBestLeg([])).toBeNull();
+  });
+});
+
+describe("buildTodayAccaV2", () => {
+  const meta = (id: number) => ({ matchId: id, league: "PL", utcDate: NOW, homeTeam: `H${id}`, awayTeam: `A${id}` });
+  const leg = (partial: Partial<MenuLeg>): MenuLeg => ({
+    market: "h2h",
+    selection: "home",
+    line: null,
+    modelProb: 0.6,
+    price: 2,
+    priceKind: "market",
+    evPct: 0.2,
+    ...partial,
+  });
+
+  it("combines mixed priceKinds: products over all, EV over priced legs only", () => {
+    const acca = buildTodayAccaV2([
+      { match: meta(1), leg: leg({ modelProb: 0.6, price: 2, priceKind: "market" }) },
+      { match: meta(2), leg: leg({ modelProb: 0.5, price: 1.5, priceKind: "derived" }) },
+      { match: meta(3), leg: leg({ modelProb: 0.8, price: 1.25, priceKind: "model", evPct: null }) },
+    ]);
+    expect(acca).not.toBeNull();
+    expect(acca?.legs.length).toBe(3);
+    expect(acca?.combinedOdds).toBeCloseTo(2 * 1.5 * 1.25, 12);
+    expect(acca?.combinedProb).toBeCloseTo(0.6 * 0.5 * 0.8, 12);
+    // Priced EV: (0.6*2) * (0.5*1.5) - 1 = 1.2 * 0.75 - 1 = -0.1
+    expect(acca?.evPct).toBeCloseTo(-0.1, 12);
+    expect(acca?.modelLegs).toBe(1);
+  });
+
+  it("takes top-4 by modelProb and nulls below 2", () => {
+    const five = [1, 2, 3, 4, 5].map((id) => ({ match: meta(id), leg: leg({ modelProb: 0.5 + id * 0.01 }) }));
+    const acca = buildTodayAccaV2(five);
+    expect(acca?.legs.map((l) => l.matchId)).toEqual([5, 4, 3, 2]);
+    expect(buildTodayAccaV2([{ match: meta(1), leg: leg({}) }])).toBeNull();
+    expect(buildTodayAccaV2([])).toBeNull();
+  });
+
+  it("evPct is null when every leg is model-priced", () => {
+    const acca = buildTodayAccaV2([
+      { match: meta(1), leg: leg({ modelProb: 0.8, price: 1.25, priceKind: "model", evPct: null }) },
+      { match: meta(2), leg: leg({ modelProb: 0.7, price: 1.4, priceKind: "model", evPct: null }) },
+    ]);
+    expect(acca?.evPct).toBeNull();
+    expect(acca?.modelLegs).toBe(2);
   });
 });

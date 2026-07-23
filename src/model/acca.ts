@@ -1,10 +1,13 @@
 /**
- * "Today's ACCA" and "Weekly Rollover" builders (pure functions, no bindings).
- * Input candidates are the latest value-filtered odds snapshots for upcoming
- * matches (assembled in the route from repo rows via latestPerCombo +
- * isValueRow). Combined products assume independence between legs — fine for
- * unrelated matches; noted wherever consumed.
+ * "Today's ACCA" (v2: highest-probability leg per match across 1X2, double
+ * chance, totals and BTTS, with market/derived/model pricing tiers) and
+ * "Weekly Rollover" (snapshot-based, unchanged). Pure functions, no bindings.
+ * Combined products assume independence between legs — fine for unrelated
+ * matches; noted wherever consumed.
  */
+
+import type { Markets } from "./markets";
+import { fairImplied } from "./odds";
 
 export interface AccaCandidate {
   match_id: number;
@@ -38,21 +41,8 @@ export interface AccaLeg {
   evPct: number;
 }
 
-export interface CombinedAcca {
-  combinedOdds: number;
-  combinedProb: number;
-  evPct: number;
-}
-
 const DAY_MS = 86_400_000;
-const TODAY_HORIZON_MS = DAY_MS; // "today" = next 24h for the ACCA card
-const MAX_LEGS = 4;
 const ROLLOVER_MIN_PROB = 0.45;
-// ACCA legs need real substance: at low probabilities the raw-EV sort is
-// dominated by longshot noise (a 20% shot at 7.8 "beats" everything), and
-// compounding 2-4 of those builds a card that looks +EV while being pure
-// variance. Floor mirrors the rollover philosophy, relaxed one notch.
-const ACCA_LEG_MIN_PROB = 0.3;
 
 function toLeg(c: AccaCandidate): AccaLeg {
   return {
@@ -70,46 +60,6 @@ function toLeg(c: AccaCandidate): AccaLeg {
     bookmakers: c.bookmakers,
     evPct: c.ev_pct,
   };
-}
-
-/**
- * Product of leg prices/probs. Independence assumption: legs are from
- * unrelated matches, so joint probability is the plain product.
- */
-export function combineAcca(legs: { modelProb: number; bestOdds: number }[]): CombinedAcca {
-  const combinedOdds = legs.reduce((a, l) => a * l.bestOdds, 1);
-  const combinedProb = legs.reduce((a, l) => a * l.modelProb, 1);
-  return { combinedOdds, combinedProb, evPct: legs.length === 0 ? 0 : combinedProb * combinedOdds - 1 };
-}
-
-export interface TodayAcca extends CombinedAcca {
-  legs: AccaLeg[];
-}
-
-/**
- * Today's ACCA: highest-EV candidates from matches starting within the next
- * 24h, max one leg per match, top 4. Null when fewer than 2 legs (honest:
- * no card on dead days).
- */
-export function buildTodayAcca(candidates: AccaCandidate[], nowIso: string): TodayAcca | null {
-  const now = Date.parse(nowIso);
-  const horizon = now + TODAY_HORIZON_MS;
-  const pool = candidates
-    .filter((c) => {
-      const t = Date.parse(c.utc_date);
-      return t >= now && t <= horizon && c.model_prob >= ACCA_LEG_MIN_PROB;
-    })
-    .sort((a, b) => b.ev_pct - a.ev_pct);
-  const seenMatches = new Set<number>();
-  const legs: AccaLeg[] = [];
-  for (const c of pool) {
-    if (seenMatches.has(c.match_id)) continue;
-    seenMatches.add(c.match_id);
-    legs.push(toLeg(c));
-    if (legs.length === MAX_LEGS) break;
-  }
-  if (legs.length < 2) return null;
-  return { legs, ...combineAcca(legs) };
 }
 
 export interface RolloverDay {
@@ -161,4 +111,179 @@ export function buildWeeklyRollover(candidates: AccaCandidate[], nowIso: string,
     }
   }
   return { days, path };
+}
+
+/* ================= ACCA v2: highest-probability legs across markets ================= */
+
+/** One snapshot outcome's aggregated prices for a match. */
+export interface SnapOutcome {
+  best: number;
+  consensus: number;
+  bookmakers: number;
+}
+
+/** Latest h2h + totals snapshot for one match (nullable pieces). */
+export interface MatchSnapshot {
+  h2h: Partial<Record<"home" | "draw" | "away", SnapOutcome>>;
+  /** key `${selection}|${line}` e.g. "over|2.5" */
+  totals: Map<string, SnapOutcome>;
+}
+
+export type PriceKind = "market" | "derived" | "model";
+
+export interface MenuLeg {
+  market: string;
+  selection: string;
+  line: number | null;
+  modelProb: number;
+  price: number;
+  priceKind: PriceKind;
+  evPct: number | null;
+}
+
+/**
+ * Derived double-chance prices from the match's CONSENSUS 1X2 prices:
+ * margin-normalize (fairImplied), then 1X = 1/(pH+pD) etc. These are
+ * ESTIMATES computed from quoted 1X2 prices, not bookmaker-quoted DC prices.
+ */
+export function dcPricesFromH2h(pricesH: number, pricesD: number, pricesA: number): { o1X: number; oX2: number; o12: number } {
+  const [pH, pD, pA] = fairImplied([pricesH, pricesD, pricesA]);
+  const safe = (p: number) => (p > 0 ? 1 / p : 0);
+  return { o1X: safe(pH + pD), oX2: safe(pA + pD), o12: safe(pH + pA) };
+}
+
+/**
+ * All candidate legs for one match: market-priced (h2h + synced totals from
+ * the snapshot), derived (double chance from consensus 1X2), and model-only
+ * (BTTS + every O/U line both sides at the model fair price 1/p — marked
+ * "model", never used in EV math).
+ */
+export function legMenu(gridMarkets: Markets, snap: MatchSnapshot | null): MenuLeg[] {
+  const legs: MenuLeg[] = [];
+  const grid1x2: Record<string, number> = {
+    home: gridMarkets.homeWin,
+    draw: gridMarkets.draw,
+    away: gridMarkets.awayWin,
+  };
+
+  if (snap) {
+    for (const sel of ["home", "draw", "away"] as const) {
+      const o = snap.h2h[sel];
+      if (!o) continue;
+      legs.push({
+        market: "h2h",
+        selection: sel,
+        line: null,
+        modelProb: grid1x2[sel],
+        price: o.best,
+        priceKind: "market",
+        evPct: grid1x2[sel] * o.best - 1,
+      });
+    }
+    const h = snap.h2h.home;
+    const d = snap.h2h.draw;
+    const a = snap.h2h.away;
+    if (h && d && a) {
+      const dc = dcPricesFromH2h(h.consensus, d.consensus, a.consensus);
+      const dcLegs: [string, number, number][] = [
+        ["1X", gridMarkets.doubleChance.homeOrDraw, dc.o1X],
+        ["X2", gridMarkets.doubleChance.awayOrDraw, dc.oX2],
+        ["12", gridMarkets.doubleChance.homeOrAway, dc.o12],
+      ];
+      for (const [sel, prob, price] of dcLegs) {
+        legs.push({ market: "doubleChance", selection: sel, line: null, modelProb: prob, price, priceKind: "derived", evPct: prob * price - 1 });
+      }
+    }
+    for (const [key, o] of snap.totals) {
+      const [sel, lineS] = key.split("|");
+      const line = Number(lineS);
+      const lineObj = gridMarkets.overUnder.find((l) => l.line === line);
+      if (!lineObj) continue;
+      const prob = sel === "over" ? lineObj.over : lineObj.under;
+      legs.push({ market: "totals", selection: sel, line, modelProb: prob, price: o.best, priceKind: "market", evPct: prob * o.best - 1 });
+    }
+  }
+
+  // Model-only legs: BTTS + every line both sides at the model fair price.
+  legs.push({ market: "btts", selection: "yes", line: null, modelProb: gridMarkets.bttsYes, price: 1 / gridMarkets.bttsYes, priceKind: "model", evPct: null });
+  legs.push({ market: "btts", selection: "no", line: null, modelProb: gridMarkets.bttsNo, price: 1 / gridMarkets.bttsNo, priceKind: "model", evPct: null });
+  for (const l of gridMarkets.overUnder) {
+    legs.push({ market: "totals", selection: "over", line: l.line, modelProb: l.over, price: 1 / l.over, priceKind: "model", evPct: null });
+    legs.push({ market: "totals", selection: "under", line: l.line, modelProb: l.under, price: 1 / l.under, priceKind: "model", evPct: null });
+  }
+  return legs;
+}
+
+export interface PickFloors {
+  minProb: number;
+  minEv: number;
+}
+
+export const ACCA_V2_FLOORS: PickFloors = { minProb: 0.55, minEv: -0.03 };
+
+const KIND_RANK: Record<PriceKind, number> = { market: 0, derived: 1, model: 2 };
+
+/**
+ * The single highest-probability favorable outcome for a match: legs with
+ * modelProb ≥ 0.55 and (unpriced OR evPct ≥ −0.03), highest modelProb wins;
+ * tie-break higher evPct (unpriced counts lowest), then market > derived > model.
+ */
+export function pickBestLeg(menu: MenuLeg[], floors: PickFloors = ACCA_V2_FLOORS): MenuLeg | null {
+  const eligible = menu.filter((l) => l.modelProb >= floors.minProb && (l.evPct === null || l.evPct >= floors.minEv));
+  if (eligible.length === 0) return null;
+  return [...eligible].sort((a, b) => {
+    if (b.modelProb !== a.modelProb) return b.modelProb - a.modelProb;
+    const evA = a.evPct ?? Number.NEGATIVE_INFINITY;
+    const evB = b.evPct ?? Number.NEGATIVE_INFINITY;
+    if (evB !== evA) return evB - evA;
+    return KIND_RANK[a.priceKind] - KIND_RANK[b.priceKind];
+  })[0];
+}
+
+export interface AccaV2Leg extends MenuLeg {
+  matchId: number;
+  league: string;
+  utcDate: string;
+  homeTeam: string;
+  awayTeam: string;
+}
+
+export interface MatchMeta {
+  matchId: number;
+  league: string;
+  utcDate: string;
+  homeTeam: string;
+  awayTeam: string;
+}
+
+export interface TodayAccaV2 {
+  legs: AccaV2Leg[];
+  combinedOdds: number;
+  combinedProb: number;
+  /** Π(modelProb×price) over market+derived legs − 1; null when no priced legs. */
+  evPct: number | null;
+  modelLegs: number;
+}
+
+/**
+ * Assemble the card from the per-match picks: up to 4 matches ranked by
+ * their leg's modelProb (min 2). combinedOdds/Prob multiply ALL legs (model
+ * legs included at their fair price); evPct compounds only market+derived legs.
+ */
+export function buildTodayAccaV2(picked: { match: MatchMeta; leg: MenuLeg }[]): TodayAccaV2 | null {
+  const top = [...picked].sort((a, b) => b.leg.modelProb - a.leg.modelProb).slice(0, 4);
+  if (top.length < 2) return null;
+  const legs: AccaV2Leg[] = top.map(({ match, leg }) => ({
+    ...leg,
+    matchId: match.matchId,
+    league: match.league,
+    utcDate: match.utcDate,
+    homeTeam: match.homeTeam,
+    awayTeam: match.awayTeam,
+  }));
+  const combinedOdds = legs.reduce((a, l) => a * l.price, 1);
+  const combinedProb = legs.reduce((a, l) => a * l.modelProb, 1);
+  const priced = legs.filter((l) => l.priceKind !== "model");
+  const evPct = priced.length > 0 ? priced.reduce((a, l) => a * (l.modelProb * l.price), 1) - 1 : null;
+  return { legs, combinedOdds, combinedProb, evPct, modelLegs: legs.length - priced.length };
 }

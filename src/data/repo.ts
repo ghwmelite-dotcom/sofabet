@@ -406,6 +406,43 @@ export interface UpcomingSnapshotRow extends OddsSnapshotRow {
   match_league: string;
 }
 
+export interface UpcomingFixtureRow {
+  id: number;
+  league: string;
+  utc_date: string;
+  status: string;
+  home_team_id: number;
+  away_team_id: number;
+  home_name: string;
+  away_name: string;
+}
+
+/** SCHEDULED/TIMED fixtures across the given leagues in (nowIso, untilIso], with team names. */
+export async function getUpcomingFixturesAll(
+  db: D1Database,
+  leagues: string[],
+  nowIso: string,
+  untilIso: string,
+): Promise<UpcomingFixtureRow[]> {
+  if (leagues.length === 0) return [];
+  const placeholders = leagues.map(() => "?").join(", ");
+  const { results } = await db
+    .prepare(
+      `SELECT m.id, m.league, m.utc_date, m.status, m.home_team_id, m.away_team_id,
+              ht.name AS home_name, at.name AS away_name
+       FROM matches m
+       JOIN teams ht ON ht.id = m.home_team_id
+       JOIN teams at ON at.id = m.away_team_id
+       WHERE m.league IN (${placeholders})
+         AND m.status IN ('SCHEDULED', 'TIMED')
+         AND m.utc_date > ? AND m.utc_date <= ?
+       ORDER BY m.utc_date ASC`,
+    )
+    .bind(...leagues, nowIso, untilIso)
+    .all<UpcomingFixtureRow>();
+  return results;
+}
+
 /**
  * Odds snapshots for SCHEDULED/TIMED matches across the given leagues with
  * kickoff in (nowIso, untilIso]. The acca endpoint dedupes to the latest per
