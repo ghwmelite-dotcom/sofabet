@@ -73,6 +73,9 @@ interface AfFixtureEntry {
 interface AfFixturesResponse {
   paging?: { current?: number; total?: number };
   response?: AfFixtureEntry[];
+  /** API-Football returns soft errors (bad league/season/plan) here, often with results: 0. */
+  errors?: unknown;
+  results?: number;
 }
 
 /** Map one API-Football fixture entry to our domain; null = skip (postponed/cancelled/etc). */
@@ -115,6 +118,8 @@ export const AF_QUOTA_STOP = 95;
 export class ApiFootballClient {
   /** True once today's counter passes AF_QUOTA_WARN (80). */
   quotaWarning = false;
+  /** Diagnostics from the most recent call (soft errors + result count). */
+  lastDiag: { errors?: unknown; results?: number } | null = null;
 
   constructor(
     private readonly apiKey: string,
@@ -153,7 +158,9 @@ export class ApiFootballClient {
     if (typeof data !== "object" || data === null) {
       throw new ApiFootballError(`API-Football returned a non-object payload for ${path}`, 200);
     }
-    return data as AfFixturesResponse;
+    const parsed = data as AfFixturesResponse;
+    this.lastDiag = { errors: parsed.errors, results: parsed.results };
+    return parsed;
   }
 
   /**

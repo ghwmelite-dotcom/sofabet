@@ -17,6 +17,9 @@ export interface SeasonSyncResult {
   season: string;
   matches: number;
   skipped: number;
+  /** API-Football soft-error payload + upstream result count, present on empty seasons. */
+  upstreamErrors?: unknown;
+  upstreamResults?: number | null;
 }
 
 export interface LeagueSyncResult {
@@ -112,7 +115,17 @@ async function syncLeagueApiFootball(db: D1Database, client: ApiFootballClient, 
   for (const season of apiFootballSeasons(seasons)) {
     const fixtures = await client.getLeagueFixtures(apiFootballId, season);
     apiCalls++;
-    if (fixtures.length === 0) continue;
+    if (fixtures.length === 0) {
+      // Empty season: surface the upstream soft-error so it isn't silent.
+      seasonResults.push({
+        season: String(season),
+        matches: 0,
+        skipped: 0,
+        upstreamErrors: client.lastDiag?.errors,
+        upstreamResults: client.lastDiag?.results ?? null,
+      });
+      continue;
+    }
     const stored = await storeSeason(db, leagueKey, fixtures);
     teamTotal = Math.max(teamTotal, stored.teams);
     seasonResults.push({ season: String(season), matches: stored.result.matches, skipped: stored.result.skipped });
