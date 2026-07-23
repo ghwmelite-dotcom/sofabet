@@ -52,7 +52,8 @@ export const LEAGUES: Record<string, LeagueConfig> = {
   AUT: { name: "Bundesliga (Austria)", fdOrgCode: "", oddsSportKey: "soccer_austria_bundesliga", provider: UK, fdukCode: "AUT", tier: MINOR },
   SUI: { name: "Super League", fdOrgCode: "", oddsSportKey: "soccer_switzerland_superleague", provider: UK, fdukCode: "SWZ", tier: MINOR },
   POL: { name: "Ekstraklasa", fdOrgCode: "", oddsSportKey: "soccer_poland_ekstraklasa", provider: UK, fdukCode: "POL", tier: MINOR },
-  ROU: { name: "Superliga (Romania)", fdOrgCode: "", oddsSportKey: "soccer_romania_liga_1", provider: UK, fdukCode: "ROU", tier: MINOR },
+  // ROU's key is unknown — unpinned so sportKeyFor falls back to live /sports title resolution.
+  ROU: { name: "Superliga (Romania)", fdOrgCode: "", oddsSportKey: "", provider: UK, fdukCode: "ROU", tier: MINOR },
   JPN: { name: "J1 League", fdOrgCode: "", oddsSportKey: "soccer_japan_j_league", provider: UK, fdukCode: "JPN", tier: MINOR },
   MEX: { name: "Liga MX", fdOrgCode: "", oddsSportKey: "soccer_mexico_ligamx", provider: UK, fdukCode: "MEX", tier: MINOR },
   MLS: { name: "MLS", fdOrgCode: "", oddsSportKey: "soccer_usa_mls", provider: UK, fdukCode: "USA", tier: MINOR },
