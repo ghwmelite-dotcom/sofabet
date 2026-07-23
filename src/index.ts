@@ -9,7 +9,7 @@ import { handleRequest } from "./api/routes";
 import { LEAGUES } from "./config";
 import { FootballDataClient } from "./data/footballData";
 import { syncAllLeagues } from "./data/sync";
-import { syncOddsLeague } from "./data/syncOdds";
+import { dayOfYearUtc, pickMinorsForDay, syncOddsLeague } from "./data/syncOdds";
 import { syncStatsBatch } from "./data/syncStats";
 import { refitLeague, snapshotUpcomingPredictions } from "./model/service";
 import { StatsRestrictedError } from "./types";
@@ -50,10 +50,17 @@ async function runDaily(env: Env, cron: string): Promise<void> {
     }
   }
 
-  // Odds sync after refits: h2h only (1 unit/league/day ≈ 240/month on the
-  // 500/month free tier). totals stay on-demand via POST /api/sync-odds.
+  // Odds sync after refits: h2h only (1 quota unit per league call). Tiered
+  // cadence: all 6 majors every day + a rotating group of 4 minors
+  // (day-of-year % 3, so each minor refreshes every 3 days).
+  // Quota math: 6×30 + 4×30 = 300 units/month, leaving ~200/month headroom
+  // for manual h2h+totals syncs under the 500/month free-tier cap.
   if (env.ODDS_API_KEY) {
-    for (const league of Object.keys(LEAGUES)) {
+    const majors = Object.entries(LEAGUES).filter(([, c]) => c.tier === "major").map(([k]) => k);
+    const minors = Object.entries(LEAGUES).filter(([, c]) => c.tier === "minor").map(([k]) => k);
+    const todaysMinors = pickMinorsForDay(minors, dayOfYearUtc(new Date()));
+    console.log(JSON.stringify({ message: "odds cadence", majors, minorsToday: todaysMinors }));
+    for (const league of [...majors, ...todaysMinors]) {
       try {
         const result = await syncOddsLeague(env.DB, env, league, "h2h");
         console.log(

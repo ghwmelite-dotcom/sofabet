@@ -132,9 +132,9 @@ describe("ApiFootballClient quota guard (stubbed fetch, no live calls)", () => {
 });
 
 describe("stats pipeline provider exclusion", () => {
-  it("apifootball leagues are skipped, fdorg + ad-hoc leagues stay", () => {
-    const { eligible, skipped } = statsEligibleLeagues(["PL", "BSA", "SWE", "DEN", "NOR", "FIN", "TEST"]);
-    expect(skipped.sort()).toEqual(["DEN", "FIN", "NOR", "SWE"]);
+  it("non-fdorg leagues are skipped, fdorg + ad-hoc leagues stay", () => {
+    const { eligible, skipped } = statsEligibleLeagues(["PL", "BSA", "SWE", "NOR", "FIN", "ARG", "TEST"]);
+    expect(skipped.sort()).toEqual(["ARG", "FIN", "NOR", "SWE"]); // fduk leagues
     expect(eligible).toEqual(["PL", "BSA", "TEST"]);
   });
 });

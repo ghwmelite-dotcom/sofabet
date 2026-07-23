@@ -35,6 +35,22 @@ const META_QUOTA_REMAINING = "odds_quota_remaining";
 const META_QUOTA_USED = "odds_quota_used";
 const META_QUOTA_AT = "odds_quota_updated_at";
 
+/** 1-based day-of-year in UTC (deterministic across crons running the same day). */
+export function dayOfYearUtc(d: Date): number {
+  const start = Date.UTC(d.getUTCFullYear(), 0, 0); // Dec 31 of previous year
+  return Math.floor((d.getTime() - start) / 86_400_000);
+}
+
+/**
+ * Deterministic minor-league rotation: minors are partitioned by list index
+ * into 3 daily groups (4 each for 12 minors); dayOfYear % 3 picks today's
+ * group, so every minor refreshes every 3 days. Pure — unit-tested.
+ */
+export function pickMinorsForDay(minorKeys: string[], dayOfYear: number): string[] {
+  const slot = ((dayOfYear % 3) + 3) % 3;
+  return minorKeys.filter((_, i) => i % 3 === slot);
+}
+
 export interface OddsSyncResult {
   league: string;
   sportKey: string;

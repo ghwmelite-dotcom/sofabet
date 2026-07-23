@@ -109,8 +109,15 @@ function colIndex(header: string[], name: string): number {
 /** Season label style: "single" (2026) or "slash" (2025/2026, winter leagues). */
 export type SeasonStyle = "single" | "slash";
 
+/**
+ * Style follows the league's CURRENT format — the most recent season label
+ * (callers pass the recency-sorted list). Argentina switched from slash to
+ * calendar-year in 2025, so its file contains slash labels in history but
+ * new seasons are single-year.
+ */
 export function detectSeasonStyle(seasonLabels: string[]): SeasonStyle {
-  return seasonLabels.some((s) => s.includes("/")) ? "slash" : "single";
+  const latest = seasonLabels[0] ?? "";
+  return latest.includes("/") ? "slash" : "single";
 }
 
 export function seasonLabelForDate(utcDate: string, style: SeasonStyle): string {

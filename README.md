@@ -34,23 +34,33 @@ yellow-cards model, team ratings, and walk-forward backtests.
 
 ## Match-data providers
 
-| Provider | Leagues | Notes |
+| Tier | Provider | Leagues |
 |---|---|---|
-| football-data.org (`fdorg`) | PL, ELC, BL1, SA, PD, FL1, DED, PPL, BSA | Free tier 10 req/min; bookings (cards) endpoint |
-| football-data.co.uk (`fduk`) | SWE, DEN, NOR, FIN | Free CSVs, no key, updated ~twice weekly; files include closing odds (earmarked for a future "backtest vs real prices" feature); ids are synthetic hashes (+8e9 namespace) |
-| API-Football (`apifootball`, api-sports.io) | none today | Client kept for a possible paid tier; its **free plan only serves seasons 2022–2024** (no current Nordic season), so no league routes to it and the key is optional/unused |
+| major (daily odds sync) | football-data.org (`fdorg`) | PL, PD, SA, BL1, FL1, BSA |
+| minor (4/day rotation) | football-data.co.uk (`fduk`) | SWE, NOR, FIN (Nordics stayed — mid-season summer leagues), ARG, IRL, AUT, SUI, POL, ROU, JPN, MEX, MLS |
+| unused | API-Football (`apifootball`) | Client kept for a possible paid tier; its **free plan only serves seasons 2022–2024** |
 
-The Nordic leagues play summer calendars (SWE/NOR/FIN roughly
-March–November; DEN Superliga is actually a winter league, July–May, with
-split-year season labels — the sync handles both), filling the European
-off-season alongside BSA. Cards/stats stay fdorg-only: `/api/sync-stats`
-rejects non-fdorg leagues, and `/api/predict` returns `cards: null` with a
-coverage note for them.
+Removed from the registry: **ELC, DED, PPL, DEN** — their D1 data stays
+frozen and readable via the API; restoring any of them is a one-line re-add
+in `src/config.ts`. RUS was deliberately left out of the fduk additions
+(doubtful odds coverage; the minor rotation is sized for exactly 12).
+
+**Odds quota model** (the-odds-api free tier, 500 units/month): 6 majors × 1
+h2h unit/day (180) + 4 rotating minors × 1/day (120) = **300 units/month**,
+leaving ~200 for manual `POST /api/sync-odds` refreshes (h2h+totals = 2
+units) any league, any time. Each minor refreshes every 3 days
+(day-of-year % 3 partition).
+
+fduk league files also include closing-odds columns (earmarked for a future
+"backtest vs real prices" feature); their match/team ids are synthetic
+deterministic hashes (+8e9 namespace). Cards/stats stay fdorg-only:
+`/api/sync-stats` rejects non-fdorg leagues, and `/api/predict` returns
+`cards: null` with a coverage note for them.
 
 Setup for API-Football (only needed if a paid plan is ever added): register
 at [dashboard.api-football.com](https://dashboard.api-football.com/register),
-then `npx wrangler secret put API_FOOTBALL_KEY`. The fduk Nordic sync needs
-no key at all: `POST /api/sync?league=SWE&seasons=3`.
+then `npx wrangler secret put API_FOOTBALL_KEY`. The fduk syncs need no key
+at all: `POST /api/sync?league=ARG&seasons=3`.
 
 ## Setup (production)
 
