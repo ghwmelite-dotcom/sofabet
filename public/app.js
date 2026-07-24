@@ -379,7 +379,7 @@ function priceEl(leg) {
   if (leg.priceKind === "model") {
     return el("span", { class: "num muted", title: "model fair price — no bookmaker price available", text: `~${num(leg.price)}` });
   }
-  const span = el("span", { class: "num", style: "color:var(--amber)", title: leg.priceKind === "derived" ? "derived from consensus 1X2 (estimate)" : "best market price" });
+  const span = el("span", { class: "odd-pill", title: leg.priceKind === "derived" ? "derived from consensus 1X2 (estimate)" : "best market price" });
   span.append(num(leg.price));
   if (leg.priceKind === "derived") span.append(el("sup", { class: "small", text: "d" }));
   return span;
@@ -390,7 +390,7 @@ function legRow(leg) {
     crest(leg.homeTeam, 20),
     crest(leg.awayTeam, 20),
     el("span", { class: "name", text: `${leg.homeTeam} v ${leg.awayTeam}` }),
-    el("span", { class: "small muted", text: accaLegLabel(leg) }),
+    el("span", { class: "tip-pill", text: accaLegLabel(leg) }),
     pcell(pct0(leg.modelProb), leg.modelProb, leg.market === "h2h" ? 0.33 : 0.5),
     priceEl(leg),
   ]);
@@ -472,7 +472,7 @@ function rolloverCard(rollover) {
         : el("span", { class: "small muted", text: "no qualifying pick" }),
       d.leg ? el("span", { class: "small muted", text: `${marketLabel(d.leg.market, d.leg.line)} · ${d.leg.selection}` }) : null,
       d.leg ? pcell(pct0(d.leg.modelProb), d.leg.modelProb, d.leg.market === "h2h" ? 0.33 : 0.5) : null,
-      d.leg ? el("span", { class: "num", style: "color:var(--amber)", text: num(d.leg.bestOdds) }) : null,
+      d.leg ? el("span", { class: "odd-pill", text: num(d.leg.bestOdds) }) : null,
       d.leg ? logBtn : null,
       el("span", { style: "flex:1" }),
       el("span", { class: "num", text: cum ? `x${num(cum.cumulativeOdds)}` : "–" }),
@@ -871,12 +871,18 @@ function resultRow(m) {
   const g = m.grade;
   const sideLabel = { home: "1", draw: "X", away: "2" }[g.predicted];
   const sideProb = g.predicted === "home" ? snap.homeWin : g.predicted === "draw" ? snap.draw : snap.awayWin;
+  const circle = el("span", { class: `grade-circle ${g.outcomeHit ? "hit" : "miss"}` });
+  circle.innerHTML = g.outcomeHit ? ICONS.check : ICONS.x;
   return el("div", { class: "match-row", style: "cursor:default" }, [
     el("div", { class: "mr-teams" }, [
       el("div", { class: "mr-team" }, [crest(m.homeTeam, 24), el("span", { class: "name", text: m.homeTeam })]),
       el("div", { class: "mr-team" }, [crest(m.awayTeam, 24), el("span", { class: "name", text: m.awayTeam })]),
     ]),
-    el("span", { class: "num", style: "font-size:16px;font-weight:700", text: `${m.homeGoals}–${m.awayGoals}` }),
+    el("div", { class: "grade-score" }, [
+      el("span", { class: "grade-goals", text: String(m.homeGoals) }),
+      circle,
+      el("span", { class: "grade-goals", text: String(m.awayGoals) }),
+    ]),
     el("div", { class: "mr-cells" }, [
       gradeCell(`${sideLabel} ${pct0(sideProb)}`, g.outcomeHit),
       gradeCell(`O2.5 ${pct0(snap.over25)}`, g.over25Hit),
@@ -1045,8 +1051,12 @@ async function loadValueList(list, league, quotaBadge) {
         return el("div", { class: "match-row", style: "cursor:default" }, [
           el("div", { class: "mr-teams" }, [
             el("div", { style: "font-weight:600", text: `${r.homeTeam} vs ${r.awayTeam}` }),
-            el("div", { class: "small muted", text: `${kickoff} · ${marketLabel} · ${r.selection}` }),
-            el("div", { class: "small muted num", text: `best ${num(r.bestOdds)} · fair ${num(r.fairOdds)} · consensus ${num(r.consensusOdds)} · ${r.bookmakers} books` }),
+            el("div", { class: "small muted", text: kickoff }),
+            el("div", { style: "display:flex;gap:6px;align-items:center;margin-top:3px;flex-wrap:wrap" }, [
+              el("span", { class: "tip-pill", text: `${marketLabel} · ${r.selection}` }),
+              el("span", { class: "odd-pill", text: num(r.bestOdds) }),
+              el("span", { class: "small muted num", text: `fair ${num(r.fairOdds)} · cons ${num(r.consensusOdds)} · ${r.bookmakers}b` }),
+            ]),
           ]),
           pcell(pct0(r.modelProb), r.modelProb, r.market === "h2h" ? 0.33 : 0.5),
           el("span", { class: "ev-pill", text: `+${(r.evPct * 100).toFixed(1)}% EV` }),
